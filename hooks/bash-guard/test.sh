@@ -1091,3 +1091,7 @@ echo "Total: $((PASS + FAIL)) tests"
 echo "================================"
 
 [ "$FAIL" -eq 0 ] || exit 1
+
+echo ""
+echo "=== Running adversarial probes (test-jailbreak.sh) ==="
+bash "$SCRIPT_DIR/test-jailbreak.sh" "$HOOK"

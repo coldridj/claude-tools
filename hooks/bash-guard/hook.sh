@@ -3,7 +3,8 @@
 # Prevents dangerous bash commands that can cause irreversible damage.
 #
 # Blocked operations:
-#   - rm -rf on critical paths (/, ~, *, ..)
+#   - rm with recursive+force semantics (any flag layout) on critical paths
+#     (/, ~, *, .., /usr, /etc, /var, /home, /System, /Library, $HOME)
 #   - chmod/chown -R with dangerous permissions
 #   - Piping untrusted content to shell (curl|sh, wget|bash)
 #   - sudo (privilege escalation)
@@ -63,6 +64,13 @@
 # Env vars:
 #   BASH_GUARD_DISABLED=1    Disable the hook entirely
 #   BASH_GUARD_LOG=1         Log all checks to stderr
+#
+# Normalisation: rule checks see the command after newline collapse and
+# quote/backslash stripping (see COMMAND_FLAT below). A few syntactic
+# checks that need to *see* quotes (eval with a string literal, here-doc
+# delimiter form, printf escape construction) use the newline-only
+# variant ($COMMAND_NORM) instead. The original literal is kept in
+# $COMMAND_ORIG for diagnostic logging.
 
 set -euo pipefail
 
@@ -83,6 +91,26 @@ COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 if [ -z "$COMMAND" ]; then
   exit 0
 fi
+
+# --- Normalisation (substring-evasion defence) -------------------------------
+# COMMAND_NORM:  line-continuations `\<NL>` collapsed to a single space (bash's
+#                own behaviour — keeps the statement intact), then any
+#                remaining newlines turned into `;` so segment-anchored
+#                regexes `(^|[;&|]\s*)<cmd>\s` still recognise the boundary.
+#                Space would not work: `echo a\nsudo ...` becoming
+#                `echo a sudo ...` loses the statement boundary.
+# COMMAND_FLAT:  NORM with backslash, single-quote, and double-quote chars
+#                stripped. Bash strips these at exec time, so 'r\m',
+#                '"rm"', and 'r""m' all resolve to `rm` — but the literal
+#                text in COMMAND would otherwise evade substring regex.
+# COMMAND:       set to COMMAND_FLAT so the bulk of rules below can keep
+#                their existing `echo "$COMMAND" | grep -E ...` form.
+# COMMAND_NORM is used explicitly by rules that need quote/backslash
+# visibility (eval-with-literal, here-doc delimiter, printf escapes).
+COMMAND_ORIG="$COMMAND"
+COMMAND_NORM=$(printf '%s' "$COMMAND" | sed ':a;N;$!ba;s/\\\n/ /g' | tr '\n' ';')
+COMMAND_FLAT=$(printf '%s' "$COMMAND_NORM" | tr -d '\\"'"'")
+COMMAND="$COMMAND_FLAT"
 
 log() {
   if [ "${BASH_GUARD_LOG:-0}" = "1" ]; then
@@ -140,15 +168,24 @@ done
 
 # --- Dangerous operation checks ---
 
-# rm -rf on critical/broad paths
-if echo "$COMMAND" | grep -qE 'rm\s+(-[a-zA-Z]*r[a-zA-Z]*f|(-[a-zA-Z]*f[a-zA-Z]*r))\s' 2>/dev/null; then
-  # Check for critical targets
-  if echo "$COMMAND" | grep -qE 'rm\s+-[rRf]+\s+(/(\s|$)|/\*|~(/|\s|$)|\.\.|/usr|/etc|/var|/home|/System|/Library|\$HOME)' 2>/dev/null; then
-    is_allowed "rm -rf" || block "rm -rf targeting a critical system path. This would cause irreversible data loss." "Be specific about which files to delete, or add 'allow: rm -rf' to .bash-guard."
+# rm with recursive+force semantics on critical paths. Two-step match so
+# that any flag layout (rm -rf, rm -r -f, rm --recursive --force, rm -f -r,
+# etc.) is caught — not just the original "r and f in the same short flag"
+# regex. We require BOTH a recursive flag and a force flag to appear
+# somewhere in the rm command (bounded by pipe/sep) before checking the
+# target, to avoid false-positives on `rm /etc/single-file.txt`.
+RM_RECURSIVE='(-[a-zA-Z]*r[a-zA-Z]*|--recursive\b|-R\b)'
+RM_FORCE='(-[a-zA-Z]*f[a-zA-Z]*|--force\b)'
+if echo "$COMMAND" | grep -qE "rm\s+[^|&;]*${RM_RECURSIVE}" 2>/dev/null \
+&& echo "$COMMAND" | grep -qE "rm\s+[^|&;]*${RM_FORCE}" 2>/dev/null; then
+  # Critical-path check: / alone (followed by any boundary char), or a
+  # named system root prefix, or ~ / .. / $HOME variants.
+  if echo "$COMMAND" | grep -qE 'rm\s+[^|&;]*(/[[:space:]"'\'';|&]|/$|/\*|/usr|/etc|/var|/home|/System|/Library|~[/[:space:]"'\'';|&]|~$|\.\.|\$HOME)' 2>/dev/null; then
+    is_allowed "rm -rf" || block "rm targeting a critical system path with recursive+force semantics. This would cause irreversible data loss." "Be specific about which files to delete, or add 'allow: rm -rf' to .bash-guard."
   fi
-  # Check for wildcard-only targets
-  if echo "$COMMAND" | grep -qE 'rm\s+-[rRf]+\s+\*\s*$' 2>/dev/null; then
-    is_allowed "rm -rf" || block "rm -rf * would recursively delete everything in the current directory." "Be specific about which files to delete, or add 'allow: rm -rf' to .bash-guard."
+  # Wildcard-only target
+  if echo "$COMMAND" | grep -qE 'rm\s+[^|&;]*\*\s*$' 2>/dev/null; then
+    is_allowed "rm -rf" || block "rm * with recursive+force semantics would delete everything in the current directory." "Be specific about which files to delete, or add 'allow: rm -rf' to .bash-guard."
   fi
 fi
 
@@ -461,13 +498,19 @@ if echo "$COMMAND" | grep -qE '(bash|sh|zsh|dash|ksh)\s+<<<\s' 2>/dev/null; then
   is_allowed "here-exec" || block "Here-string feeds content directly to a shell interpreter, bypassing safety checks." "Run the command directly instead of via here-string. Or add 'allow: here-exec' to .bash-guard."
 fi
 
-# Here-doc: bash << EOF, sh << 'DELIM', bash <<-EOF (with indent stripping)
-if echo "$COMMAND" | grep -qE "(bash|sh|zsh|dash|ksh)\s+<<-?\s*['\"]?[A-Za-z_]" 2>/dev/null; then
+# Here-doc: bash << EOF, sh << 'DELIM', bash <<-EOF (with indent stripping).
+# Uses COMMAND_NORM so the optional quote around the delimiter is still visible
+# (COMMAND_FLAT strips quotes, which would break this match).
+if echo "$COMMAND_NORM" | grep -qE "(bash|sh|zsh|dash|ksh)\s+<<-?\s*['\"]?[A-Za-z_]" 2>/dev/null; then
   is_allowed "here-exec" || block "Here-document feeds content directly to a shell interpreter, bypassing safety checks." "Run the commands directly instead of via here-doc. Or add 'allow: here-exec' to .bash-guard."
 fi
 
 # eval with string literal (not just variables): eval "rm -rf /"
-if echo "$COMMAND" | grep -qE "(^|[;&|]\s*)eval\s+['\"]" 2>/dev/null; then
+# Uses COMMAND_NORM so the required quote is still visible (COMMAND_FLAT
+# strips it). The bypass we want to keep blocked is `eval "..."`; if the
+# user constructs the same effect without quotes (eval bare-args), the
+# eval-on-variable rule above or downstream substring rules catch it.
+if echo "$COMMAND_NORM" | grep -qE "(^|[;&|]\s*)eval\s+['\"]" 2>/dev/null; then
   is_allowed "eval" || block "eval with a string literal executes arbitrary code that bypasses pattern matching." "Run the command directly without eval. Or add 'allow: eval' to .bash-guard."
 fi
 
@@ -496,8 +539,10 @@ if echo "$COMMAND" | grep -qE 'xxd\s+-r.*\|.*\s*(bash|sh|zsh|dash|ksh|source|eva
   is_allowed "decode-exec" || block "Decoding hex content and piping to shell executes hidden commands that bypass all safety checks." "Decode to a file first, review it, then run it. Or add 'allow: decode-exec' to .bash-guard."
 fi
 
-# printf hex/octal escapes piped to shell
-if echo "$COMMAND" | grep -qE "printf\s+['\"]\\\\(x[0-9a-fA-F]|[0-7]{3}).*\|.*\s*(bash|sh|zsh|dash|ksh|source|eval)" 2>/dev/null; then
+# printf hex/octal escapes piped to shell.
+# Uses COMMAND_NORM so the required quote around the format string is still
+# visible (COMMAND_FLAT strips quotes).
+if echo "$COMMAND_NORM" | grep -qE "printf\s+['\"]\\\\(x[0-9a-fA-F]|[0-7]{3}).*\|.*\s*(bash|sh|zsh|dash|ksh|source|eval)" 2>/dev/null; then
   is_allowed "decode-exec" || block "printf with escape sequences piped to shell executes hidden commands that bypass all safety checks." "Write the command directly instead of encoding it. Or add 'allow: decode-exec' to .bash-guard."
 fi
 
@@ -660,5 +705,5 @@ if echo "$COMMAND" | grep -qE 'gh\s+api\s.*(-X\s+(PUT|PATCH|DELETE)\s.*(/protect
   is_allowed "gh-repo-settings" || block "Modifying branch protection rules or rulesets via the GitHub API changes shared security controls without team visibility." "Modify branch protection through the GitHub web UI instead. Or add 'allow: gh-repo-settings' to .bash-guard."
 fi
 
-log "ALLOW: $COMMAND"
+log "ALLOW: $COMMAND_ORIG"
 exit 0
