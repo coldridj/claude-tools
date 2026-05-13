@@ -7,14 +7,37 @@ by severity (highest first).
 
 ## always-allow
 
-- [ ] **3 test failures depend on `CLAUDE_PROJECT_DIR` being set externally.**
-  The hook loads `$CLAUDE_PROJECT_DIR/.always-allow` and the test cases for
-  `scripts/build.sh`, `scripts/build-frontend.sh`, `scripts/inspect.sh …`
-  expect those patterns to be loaded. With `CLAUDE_PROJECT_DIR` unset
-  (running `bash test.sh` from a fresh shell), the test falls back to
-  `$PWD/.always-allow` which is empty, and the three assertions fail.
-  The test should set up its own isolated `CLAUDE_PROJECT_DIR` + project
-  `.always-allow` instead of relying on the user's env.
+- [x] **Test suite depended on `CLAUDE_PROJECT_DIR` being set externally.**
+  Earlier rewrite added section parsing tests via an isolated `run_isolated`
+  helper but left 9 integration tests using a `run_hook` form that fell
+  back to `$PWD/.always-allow`. **Fixed:** all 74 tests now go through
+  the isolated helper (which sets `HOME`, `CLAUDE_PROJECT_DIR`, and
+  `ALWAYS_ALLOW_HOOK_DIR` per case), plus the test.sh top exports
+  `CLAUDE_PROJECT_DIR=/nonexistent-test-project` so a forgetful future
+  test cannot accidentally pick up the caller's config.
+- [x] **Layered-config (default + user + project) had no coverage.** Same
+  three-file overlay as the other guards. **Fixed:** new "Layered configs"
+  section in test.sh exercises each layer in isolation and all three
+  together (5 tests + 4 follow-on context-isolation tests).
+- [x] **Section header parser is silently permissive about malformed
+  brackets.** A bare `[xyz]` line is treated as a section header even
+  when the user intended an ERE char-class pattern, losing the pattern.
+  Documented in `hooks/always-allow/HARDENING.md` with a regression-pin
+  test in test.sh.
+- [ ] **`jq` failure aborts the hook hard.** If `jq` is missing from
+  `$PATH`, `set -euo pipefail` causes the whole hook to exit non-zero;
+  the harness then treats the call as blocked. The hook should pre-check
+  `command -v jq` and fail-open with a warning. See
+  `hooks/always-allow/HARDENING.md` (I/O / runtime).
+- [ ] **Invalid POSIX ERE in a `.always-allow` pattern aborts match.**
+  Same `set -euo pipefail` interaction — a malformed pattern causes
+  `[[ $op =~ $pat ]]` to error and the hook exits non-zero without
+  emitting a decision. Pre-validate patterns at load time. See
+  `hooks/always-allow/HARDENING.md` (parser).
+- [ ] **Command normalisation missing.** `bash scripts/build.sh` works
+  but `  bash scripts/build.sh` (leading whitespace), `./scripts/build.sh`,
+  absolute paths, and `bash -c "scripts/build.sh"` do not match common
+  patterns. Documented in `hooks/always-allow/HARDENING.md` (matcher).
 
 ## session-scratch
 

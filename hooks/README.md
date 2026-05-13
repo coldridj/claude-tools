@@ -129,7 +129,8 @@ Example project `.always-allow`:
 
 When a command matches, the hook emits `{"decision": "allow"}` to stdout, bypassing the interactive permission prompt. Non-matches fall through to the permission system normally.
 
-Tests: `always-allow/test.sh`
+Tests: `always-allow/test.sh`  
+Hardening notes / known limitations: `always-allow/HARDENING.md`
 
 ---
 
