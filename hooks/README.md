@@ -97,18 +97,37 @@ Tests: none (external tool; see upstream).
 **Applies to:** `Bash`  
 **Disable:** `ALWAYS_ALLOW_DISABLED=1`
 
-Auto-approves specific Bash commands without showing a permission prompt. Only applies to single-command calls (no `&&`, `||`, `;`, `|`, or newlines) and non-background commands.
+Auto-approves specific Bash commands without showing a permission prompt. Multi-command lines (containing `&&`, `||`, `;`, `|`, or newlines) are never auto-allowed regardless of any rule.
 
-Allowlist is in `always-allow/.always-allow` (ERE patterns, one per line):
+Config files (concatenated, in load order):
+
+1. `always-allow/default.always-allow` — shipped defaults (e.g. hook test scripts)
+2. `$HOME/.claude/.always-allow` — user defaults
+3. `$CLAUDE_PROJECT_DIR/.always-allow` — project rules
+
+Each file is a list of POSIX ERE patterns, one per line, grouped into named sections:
+
+| Section | Eligible invocations |
+|---|---|
+| `[allow]` | foreground single-command only. Default section for unlabelled lines (preserves flat-list configs). |
+| `[background]` | foreground **and** background single commands. Use sparingly: background processes can hide chained payloads inside a script. Reserve for trusted long-running launchers. |
+
+Unknown section headers are silently ignored. `[bg]` is accepted as an alias for `[background]`.
+
+Example project `.always-allow`:
 
 ```
+[allow]
 ^(bash )?scripts/build[[:alnum:]_-]*\.sh
 ^(bash )?scripts/headless-chrome\.sh$
 ^(bash )?scripts/inspect\.sh.*
+^(bash )?scripts/test\.sh($|[[:space:]])
+
+[background]
 ^(bash )?scripts/run\.sh
 ```
 
-When a command matches, the hook emits `{"decision": "allow"}` to stdout, bypassing the interactive permission prompt. Commands that do not match fall through to the permission system normally.
+When a command matches, the hook emits `{"decision": "allow"}` to stdout, bypassing the interactive permission prompt. Non-matches fall through to the permission system normally.
 
 Tests: `always-allow/test.sh`
 

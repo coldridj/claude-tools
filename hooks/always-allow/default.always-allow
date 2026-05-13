@@ -1,9 +1,16 @@
 # default.always-allow — shipped defaults for the always-allow hook.
 #
-# Flat list of POSIX ERE patterns. A Bash command is auto-allowed (the
-# permission prompt is suppressed) if it matches any entry. Multi-command
-# lines (containing &&, ||, ;, |, or newlines) and background commands are
-# never auto-allowed regardless of these rules.
+# Patterns are POSIX ERE, grouped into named sections. A Bash command is auto-
+# allowed (the permission prompt is suppressed) if it matches any pattern in a
+# section the invocation is eligible for:
+#   [allow]      — foreground single-command invocations.  Default section if
+#                  no header has appeared yet (preserves flat-list configs).
+#   [background] — foreground AND background single commands.  Use sparingly:
+#                  background processes can hide chained payloads behind a
+#                  script. Reserve for trusted long-running launchers.
+#
+# Multi-command lines (containing &&, ||, ;, |, or newlines) are NEVER auto-
+# allowed regardless of section.
 #
 # Loaded together with $HOME/.claude/.always-allow and
 # $CLAUDE_PROJECT_DIR/.always-allow — all three files concatenate. To remove
@@ -11,5 +18,25 @@
 #
 # Comments begin with # and run to end of line.
 #
-# This file ships with the always-allow hook. Keep it free of
-# project-specific patterns — those belong in $CLAUDE_PROJECT_DIR/.always-allow.
+# This file ships with the always-allow hook. Keep it free of project-
+# specific patterns — those belong in $CLAUDE_PROJECT_DIR/.always-allow.
+
+[allow]
+
+# === Hook test scripts ===
+# Auto-allow running the per-hook test suites (test.sh and test-<suffix>.sh).
+# Three invocation paths are covered:
+#
+#   1. From inside the claude-tools repo itself:
+#        bash hooks/<name>/test.sh
+#   2. Via the install.sh symlinks under a consumer repo's .claude/hooks/:
+#        bash .claude/hooks/<name>/test.sh
+#   3. Via the claude-tools submodule vendored under any parent directory
+#      (git_modules/, vendor/, submodules/, etc.):
+#        bash <prefix>/claude-tools/hooks/<name>/test.sh
+#
+# Trailing args (test fixtures, --verbose, etc.) are allowed. Multi-command
+# invocations (pipes, chains) are still rejected by the multi-command guard.
+^(bash )?hooks/[a-z][a-z0-9-]*/test(-[a-z][a-z0-9-]*)?\.sh($|[[:space:]])
+^(bash )?\.claude/hooks/[a-z][a-z0-9-]*/test(-[a-z][a-z0-9-]*)?\.sh($|[[:space:]])
+^(bash )?[a-zA-Z0-9._/-]+/claude-tools/hooks/[a-z][a-z0-9-]*/test(-[a-z][a-z0-9-]*)?\.sh($|[[:space:]])
