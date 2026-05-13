@@ -69,6 +69,13 @@ else
   SOURCE_SHA="$(git rev-parse --verify "$SOURCE_SHA^{commit}")"
 fi
 
+SHORT_SHA="$(git rev-parse --short "$SOURCE_SHA")"
+if [ "$SOURCE_LABEL" = "$SOURCE_SHA" ]; then
+  COMMIT_MSG="Snapshot @ $SHORT_SHA"
+else
+  COMMIT_MSG="Snapshot of $SOURCE_LABEL @ $SHORT_SHA"
+fi
+
 # Temp worktree lives outside the gitdir. Combined with the env-var unset
 # above, this gives the subshell a clean worktree context for the
 # orphan-branch dance.
@@ -95,7 +102,7 @@ git worktree add --detach "$WORKTREE" "$SOURCE_SHA"
   cd "$WORKTREE"
   git checkout --orphan "$MIRROR_BRANCH"
   git add -A
-  git commit -m "Snapshot of $SOURCE_LABEL @ $SOURCE_SHA"
+  git commit -m "$COMMIT_MSG"
   git push --force "$REMOTE" "$MIRROR_BRANCH"
   # Move the `latest` tag to this snapshot commit and force-push. Tags are
   # immutable on local clones by default, so consumers may need a fetch

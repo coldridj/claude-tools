@@ -21,6 +21,14 @@ record of what was resolved.
 
 ### Added
 
+- **`scripts/test-push-github-mirror.sh`** — first test suite for the
+  github-mirror snapshot script. Each test builds a sandboxed `<tmp>/src`
+  + bare `<tmp>/origin.git` and copies the script under test into the
+  sandbox so its `REPO_ROOT` resolves there (never the real claude-tools
+  repo). Covers the manual branch-label form, the `--sha` form invoked
+  from the pre-push hook, and a non-`main` branch; each case asserts both
+  the commit message on the mirror branch and that the `latest` tag tracks
+  the mirror tip.
 - **`hooks/session-scratch/test.sh`** — first test suite for the
   session-scratch hook. 24 tests cover SessionStart `mkdir -p`,
   `touch`-bumped mtime, `$CLAUDE_ENV_FILE` export (with append-not-
@@ -32,6 +40,11 @@ record of what was resolved.
 
 ### Changed
 
+- **`scripts/push-github-mirror.sh` commit message** now uses the
+  abbreviated SHA and drops the redundant label when the script was
+  invoked via the pre-push hook (`SOURCE_LABEL == SOURCE_SHA`). Manual
+  runs produce `Snapshot of <branch> @ <short>`; hook-driven runs produce
+  `Snapshot @ <short>`.
 - **`hooks/bash-guard/hook.sh`:** `block()` now auto-extracts the allow
   key from each rule's suggestion text and prints it on a labelled
   `Override: add 'allow: <key>' to .bash-guard.` line, instead of
