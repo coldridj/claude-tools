@@ -65,17 +65,6 @@ Note: `settings.json` path deny rules [do not apply to the Bash tool](https://gi
 
 Safe variants are allowed: `rm -rf ./build`, `chmod 644 file.txt`, `curl -o file url`, `curl -d '{"key":"value"}'`, `kill -9 12345`, `docker compose down` (without -v), `docker run -v mydata:/data`, `prisma migrate dev`, `rails db:migrate`, `printenv HOME`, `cat README.md`, `set -euo pipefail`, `terraform plan`, `aws s3 ls`, `kubectl get pods`, `find -print`, `git clean -n`, `ls ~/.ssh`, `nc -l 8080`, `sqlite3 ./db.sqlite3`, `ls /mnt/data/`, `LDFLAGS=-L/usr/lib make`, `systemctl status nginx`, `launchctl list`, `ssh user@host`, `docker rm container`, `yarn add lodash`, `pkill process`.
 
-## Install
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Bande-a-Bonnot/Boucle-framework/main/tools/bash-guard/install.sh | bash
-```
-
-Or install all hooks at once:
-```bash
-curl -fsSL https://raw.githubusercontent.com/Bande-a-Bonnot/Boucle-framework/main/tools/install.sh | bash -s -- all
-```
-
 ## Configure exceptions
 
 Create a `.bash-guard` file in your project root:
@@ -148,6 +137,6 @@ bash test.sh
 
 590 verified bash tests covering all blocked patterns, disk utility destruction, data exfiltration, programmatic env dumps, sensitive file access, workaround bypass prevention, compound command bypass, multi-line comment bypass ([#38119](https://github.com/anthropics/claude-code/issues/38119)), system database protection, mount point protection, encoding bypass detection, here-string/here-doc detection, library injection, wrapper bypass, credential file operations, macOS Keychain, scheduled tasks, system services, SSH keys, and safe variants.
 
-## License
-
-MIT
+`test-jailbreak.sh` (chained from `test.sh`) holds 38 additional
+adversarial probes from the most recent hardening pass — see
+[`HARDENING.md`](HARDENING.md) for the bypass classes covered.

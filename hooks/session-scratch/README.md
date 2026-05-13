@@ -35,36 +35,6 @@ harness exposes.
 The 7-day GC on SessionStart is the failsafe for the only path neither
 event covers: process abort (Ctrl-C, kill -9, crash).
 
-## Settings registration
-
-```json
-{
-  "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "",
-        "hooks": [
-          { "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/session-scratch/hook.sh" }
-        ]
-      }
-    ],
-    "SessionEnd": [
-      {
-        "matcher": "",
-        "hooks": [
-          { "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/session-scratch/hook.sh" }
-        ]
-      }
-    ]
-  }
-}
-```
-
-The same `hook.sh` is registered for both events; it branches on
-`.hook_event_name` from stdin.
-
 ## Usage
 
 In CLAUDE.md and scripts, refer to scratch paths as

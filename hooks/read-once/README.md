@@ -6,87 +6,27 @@ A PreToolUse hook that tracks file reads within a session. When Claude tries to 
 
 By default, read-once uses **warn mode**: it allows the read but attaches an advisory message. This prevents the Edit tool deadlock (Edit requires a prior Read) and parallel read cascade failures. Set `READ_ONCE_MODE=deny` for hard blocking if you want maximum token savings and don't use Edit frequently.
 
-## Project-local modifications
+## Key behaviour
 
-This fork of read-once is adapted for our project conventions. Behavioural differences from the upstream README below:
-
-- **Deterministic invalidation, not TTL.** `READ_ONCE_TTL` defaults to `0` (off). Cache is cleared by `PostCompact`, by `SessionStart` matcher=`compact` (belt-and-suspenders), and by `session_id` rotation on `/clear` / `--resume`. `READ_ONCE_TTL>0` remains available as a failsafe for environments where `PostCompact` might not fire.
-- **Per-session scratch storage.** Cache files live at `$CLAUDE_PROJECT_DIR/$CLAUDE_SCRATCH_ROOT/<session_id>/read-once/<agent>.jsonl` (where `$CLAUDE_SCRATCH_ROOT` is set in `.claude/settings.json`, default `.scratch`), not `~/.claude/read-once/session-*.jsonl`. The `session-scratch` SessionEnd hook reclaims the directory automatically; the read-once hook no longer runs its own per-session GC. Stats stay at `~/.claude/read-once/stats.jsonl` so cross-session aggregation survives.
-- **Subagent isolation.** The hook reads `agent_id` from the payload and writes a separate cache file per agent (`main.jsonl` for the parent, `<agent_id>.jsonl` per subagent). Subagents share the parent's `session_id` but have independent context windows, so without this the parent's reads would produce false "already in context" hits in subagents.
-- **No `./read-once` CLI.** The upstream installer ships a wrapper script with `stats` / `verify` / `clear` / `install` subcommands; that script is not in this project. Manage the hook via `.claude/settings.json` directly.
-
-The remainder of this README is the upstream documentation and applies where not overridden above.
-
-## Install
-
-### macOS / Linux
-
-One command:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/Bande-a-Bonnot/Boucle-framework/main/tools/read-once/install.sh | bash
-```
-
-This downloads `hook.sh`, `compact.sh`, and `read-once` to `~/.claude/read-once/` and adds both hooks to your settings.
-
-Or clone and install manually:
-
-```sh
-git clone https://github.com/Bande-a-Bonnot/Boucle-framework.git
-cd Boucle-framework/tools/read-once
-./read-once install
-```
-
-### Windows (PowerShell 7+)
-
-```powershell
-irm https://raw.githubusercontent.com/Bande-a-Bonnot/Boucle-framework/main/tools/install.ps1 | iex
-```
-
-Or clone and install manually:
-
-```powershell
-git clone https://github.com/Bande-a-Bonnot/Boucle-framework.git
-cd Boucle-framework/tools/read-once
-pwsh read-once.ps1 install
-```
-
-Requires PowerShell 7+ (`pwsh`), not the built-in Windows PowerShell 5.1. Install with `winget install Microsoft.PowerShell` if needed.
-
-### Manual setup
-
-Add to `.claude/settings.json` by hand:
-
-```json
-{
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Read",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/path/to/read-once/hook.sh"
-          }
-        ]
-      }
-    ],
-    "PostCompact": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/path/to/read-once/compact.sh"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-On Windows, use `"command": "pwsh -File ~/.claude/read-once/hook.ps1"` for PreToolUse and `"command": "pwsh -File ~/.claude/read-once/compact.ps1"` for PostCompact.
+- **Deterministic invalidation.** `READ_ONCE_TTL` defaults to `0` (off). The
+  per-session cache is cleared by `PostCompact`, by `SessionStart`
+  matcher=`compact` (belt-and-suspenders), and by `session_id` rotation on
+  `/clear` / `--resume`. A positive `READ_ONCE_TTL` remains available as a
+  failsafe for environments where `PostCompact` might not fire reliably.
+- **Single hook entry-point.** `hook.sh` dispatches on `hook_event_name` —
+  `PreToolUse` runs the read-tracking logic, `PostCompact` /
+  `SessionStart(matcher=compact)` clear the cache. There is no longer a
+  separate `compact.sh`; route all three events at `hook.sh`.
+- **Per-session scratch storage.** Cache files live at
+  `$CLAUDE_PROJECT_DIR/$CLAUDE_SCRATCH_ROOT/<session_id>/read-once/<agent>.jsonl`
+  (where `$CLAUDE_SCRATCH_ROOT` is set in `.claude/settings.json`, default
+  `.scratch`). The `session-scratch` SessionEnd hook reclaims the directory
+  automatically. Cross-session stats persist at `~/.claude/read-once/stats.jsonl`.
+- **Subagent isolation.** The hook reads `agent_id` from the payload and
+  writes a separate cache file per agent (`main.jsonl` for the parent,
+  `<agent_id>.jsonl` per subagent). Subagents share the parent's
+  `session_id` but have independent context windows, so without this the
+  parent's reads would produce false "already in context" hits in subagents.
 
 ## How it works
 
@@ -96,7 +36,9 @@ On Windows, use `"command": "pwsh -File ~/.claude/read-once/hook.ps1"` for PreTo
 4. Compares file mtime — if unchanged, advises Claude the content is already in context
 5. In warn mode (default): allows the read with advisory. In deny mode: blocks the read entirely
 6. If the file changed since last read, allows it through (or shows just the diff — see below)
-7. Cache entries expire after 20 minutes (configurable) to handle context compaction
+7. Cache invalidation is deterministic: cleared on `PostCompact`, on
+   `SessionStart(matcher=compact)`, and on `session_id` rotation. A
+   positive `READ_ONCE_TTL` (default `0`) is available as a failsafe.
 
 ### Diff mode (opt-in)
 
@@ -127,116 +69,49 @@ If the diff is too large (>40 lines by default), read-once falls back to allowin
 
 ### What Claude sees
 
-When a re-read is blocked, Claude receives:
+When a re-read is intercepted, Claude receives (in warn mode):
 
 ```
 read-once: schema.rb (~2,340 tokens) already in context (read 3m ago, unchanged).
-Re-read allowed after 20m. Session savings: ~4,680 tokens.
+Cache cleared on /compact, /clear, or resume. Session savings: ~4,680 tokens.
 ```
 
-Claude then proceeds without the redundant read. No loss of information — the file content is still in the context window from the first read.
+Claude then proceeds without the redundant read. No loss of information — the
+file content is still in the context window from the first read.
 
 ### Compaction safety
 
-Claude Code compacts the context window during long sessions, dropping older content. A file read 30 minutes ago might no longer be in the working context.
+Claude Code compacts the context window during long sessions, dropping older
+content. A file read earlier in the session may no longer be in the working
+context.
 
 read-once handles this two ways:
 
-1. **PostCompact hook** (recommended): `compact.sh` registers as a PostCompact hook and clears the session cache immediately when compaction occurs. The installer configures this automatically.
+1. **PostCompact and SessionStart(compact)** (default): the same `hook.sh`
+   is registered for the `PostCompact` event and for `SessionStart` with
+   `matcher: "compact"`. Either firing clears the per-session cache. This
+   is the deterministic invalidation path; nothing depends on wall-clock
+   time.
+2. **TTL failsafe** (off by default): set `READ_ONCE_TTL` to a positive
+   number of seconds to additionally expire entries after that age, in
+   case `PostCompact` does not fire in your environment.
 
-2. **TTL fallback**: Cache entries also expire after `READ_ONCE_TTL` seconds (default: 1200 = 20 minutes). This catches cases where PostCompact is not configured.
-
-You can also manually reset the cache:
-
-```sh
-./read-once clear
-```
+The per-session cache directory is also reclaimed by the `session-scratch`
+SessionEnd hook, and a new `session_id` (from `/clear` / `--resume`) routes
+the cache to a fresh directory automatically.
 
 ## Stats
 
+Cross-session stats accumulate at `~/.claude/read-once/stats.jsonl`. Each
+line is a JSON event: hits (`"event":"hit"`), diff-mode interceptions
+(`"event":"diff"`), expirations (`"event":"expired"`), and compaction
+clears (`"event":"compact"`). Aggregate with `jq` for ad-hoc reports —
+e.g. total tokens saved:
+
 ```sh
-./read-once stats          # macOS/Linux
-pwsh read-once.ps1 stats   # Windows
+jq -r 'select(.event=="hit" or .event=="diff") | .tokens_saved' \
+  ~/.claude/read-once/stats.jsonl | paste -sd+ - | bc
 ```
-
-```
-read-once — file read deduplication for Claude Code
-
-  Total file reads:    47
-  Cache hits:          19 (blocked re-reads)
-  Diff hits:           3 (changed files — sent diff only)
-  First reads:         22
-  Changed files:       1 (full re-read after modification)
-  TTL expired:         2 (re-read after 20m — compaction safety)
-
-  Tokens saved:        ~38400
-  Read token total:    ~94200
-  Savings:             40%
-  Est. cost saved:     $0.1152 (Sonnet) / $0.5760 (Opus)
-
-  Top re-read files:
-    5x  schema.rb
-    4x  routes.rb
-    3x  application_controller.rb
-
-  Sessions tracked:    3
-  Cache TTL:           20 minutes (READ_ONCE_TTL=1200s)
-```
-
-## Commands
-
-```
-read-once stats       Show token savings
-read-once gain        Same as stats
-read-once verify      Full diagnostic with dry-run test
-read-once status      Quick health check
-read-once clear       Clear session cache
-read-once install     Add hook to settings
-read-once upgrade     Update installed hook to latest
-read-once uninstall   Remove hook
-```
-
-On Windows, use `pwsh read-once.ps1 <command>` instead of `./read-once <command>`.
-
-### Verify
-
-After installing, run `read-once verify` to confirm everything works:
-
-```
-$ ./read-once verify
-
-read-once verify
-
-Dependencies:
-  [ok]   jq found (jq-1.7.1)
-  [ok]   bash 5.2.37 (4+ required)
-  [ok]   python3 found (needed for diff mode)
-  [ok]   stat found
-
-Installation:
-  [ok]   Hook file exists at ~/.claude/read-once/hook.sh
-  [ok]   Hook file is executable
-  [ok]   Installed hook matches source (up to date)
-  [ok]   ~/.claude/settings.json exists
-  [ok]   settings.json is valid JSON
-  [ok]   PreToolUse Read matcher configured
-  [ok]   Hook command path resolves (~/.claude/read-once/hook.sh)
-
-Dry-run test:
-  [ok]   First read: allowed (no output = pass-through)
-  [ok]   Second read: produced valid JSON response
-  [ok]   Second read: correctly detected re-read (mode: warn)
-
-Configuration:
-  Mode:     warn (READ_ONCE_MODE)
-  TTL:      1200s (20m) (READ_ONCE_TTL)
-  Diff:     0 (READ_ONCE_DIFF)
-  Disabled: 0 (READ_ONCE_DISABLED)
-
-13/13 checks passed. read-once is ready.
-```
-
-If any check fails, verify tells you exactly what to fix.
 
 ## Configuration
 
@@ -245,21 +120,16 @@ Environment variables:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `READ_ONCE_MODE` | `warn` | `warn` allows reads with advisory message. `deny` blocks reads entirely. Warn mode prevents Edit tool deadlock and parallel read cascade failures. |
-| `READ_ONCE_TTL` | `1200` | Cache TTL in seconds. After this, re-reads are allowed (compaction safety). |
+| `READ_ONCE_TTL` | `0` | Failsafe TTL in seconds. `0` (default) means hook-driven invalidation only (`PostCompact` / `SessionStart(compact)` / `session_id` rotation). Set to a positive value to additionally expire entries after that age. |
 | `READ_ONCE_DIFF` | `0` | Set to `1` to show only diffs when files change (instead of full re-read). |
 | `READ_ONCE_DIFF_MAX` | `40` | Max diff lines before falling back to full re-read. |
 | `READ_ONCE_DISABLED` | `0` | Set to `1` to disable the hook entirely. |
 
 ## Requirements
 
-**macOS / Linux:**
 - `jq` (for JSON parsing)
 - `bash` 4+
 - `python3` (optional, for diff mode JSON escaping)
-- Claude Code with hooks support
-
-**Windows:**
-- PowerShell 7+ (`pwsh`), not the built-in Windows PowerShell 5.1
 - Claude Code with hooks support
 
 ## How much does it save?
@@ -269,26 +139,34 @@ Claude Code re-reads files more than you'd think. Common patterns:
 - Re-reading config files across different parts of a task
 - Reading the same file in subagents that share a session
 
-Each blocked re-read saves the full file token cost (including the ~70% overhead from line numbers in `cat -n` format). Run `./read-once stats` after a session to see your actual savings.
+Each blocked re-read saves the full file token cost (including the ~70%
+overhead from line numbers in `cat -n` format). Aggregate
+`~/.claude/read-once/stats.jsonl` with `jq` for actual savings.
 
 ## FAQ
 
 **The Edit tool says "File has not been read yet" even though I already read it.**
-This happens in deny mode (`READ_ONCE_MODE=deny`). Claude Code's Edit tool requires a successful Read before it will edit a file. When read-once blocks the Read, Edit thinks the file was never read. The fix: use the default warn mode (`READ_ONCE_MODE=warn`), which allows reads with an advisory instead of blocking them.
+This happens in deny mode (`READ_ONCE_MODE=deny`). Claude Code's Edit tool
+requires a successful Read before it will edit a file. When read-once
+blocks the Read, Edit thinks the file was never read. The fix: use the
+default warn mode (`READ_ONCE_MODE=warn`), which allows reads with an
+advisory instead of blocking them.
 
 **Won't this break after context compaction?**
-The installer configures a PostCompact hook (`compact.sh`) that clears the cache immediately when compaction happens. As a fallback, cache entries also expire after 20 minutes (configurable via `READ_ONCE_TTL`). You can also run `read-once clear` to reset manually.
+`PostCompact` and `SessionStart(matcher=compact)` both route at `hook.sh`,
+which clears the per-session cache. With `READ_ONCE_TTL=0` (default),
+that is the only invalidation. Set `READ_ONCE_TTL` to a positive value
+as an additional failsafe if your environment does not fire
+`PostCompact` reliably.
 
 **Claude Code reads small chunks, not whole files — does this help?**
-Partial reads with `offset` or `limit` are never cached. They always pass through. read-once only deduplicates full-file reads where the entire file is requested again.
+Partial reads with `offset` or `limit` are never cached. They always pass
+through. read-once only deduplicates full-file reads where the entire
+file is requested again.
 
 **Isn't there a good reason Claude re-reads files?**
-Yes — when the file changed, or when context compacted. read-once only blocks re-reads when the file hasn't changed (same mtime) and the cache is recent. Changed files always pass through. With diff mode enabled (`READ_ONCE_DIFF=1`), changed files show just the delta instead of the full content.
-
-## Compatibility
-
-Works alongside RTK (which handles Bash output) and Context-Mode (which handles large outputs). read-once operates on a different layer — the Read tool — so there's no conflict.
-
-## License
-
-MIT
+Yes — when the file changed, or when context compacted. read-once only
+intercepts re-reads when the file hasn't changed (same mtime) and the
+cache is current. Changed files always pass through. With diff mode
+enabled (`READ_ONCE_DIFF=1`), changed files show just the delta instead
+of the full content.

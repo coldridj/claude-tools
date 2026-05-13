@@ -37,14 +37,14 @@ and the execution order Claude Code uses when several hooks share a matcher.
 
 ### Per-hook docs
 
-| Hook | Reference | Notes |
+| Hook | README | Notes |
 | --- | --- | --- |
-| always-allow | [`hooks/always-allow/`](hooks/always-allow/) | Pattern syntax documented inline in [`default.always-allow`](hooks/always-allow/default.always-allow). |
-| bash-guard | [`hooks/bash-guard/README.md`](hooks/bash-guard/README.md) | Security hardening log: [`HARDENING.md`](hooks/bash-guard/HARDENING.md). |
-| path-guard | [`hooks/path-guard/`](hooks/path-guard/) | Pattern syntax documented inline in [`default.path-guard`](hooks/path-guard/default.path-guard). Security hardening log: [`HARDENING.md`](hooks/path-guard/HARDENING.md). |
-| read-guard | [`hooks/read-guard/`](hooks/read-guard/) | Exclusion-prefix syntax documented inline in [`default.read-guard`](hooks/read-guard/default.read-guard). |
-| read-once | [`hooks/read-once/README.md`](hooks/read-once/README.md) | Read-tracking behaviour, diff mode, stats. |
-| session-scratch | [`hooks/session-scratch/README.md`](hooks/session-scratch/README.md) | `$CLAUDE_SESSION_SCRATCH` lifecycle and 7-day GC. |
+| always-allow | [`hooks/always-allow/README.md`](hooks/always-allow/README.md) | Regex allowlist suppressing the permission prompt for matched Bash commands. |
+| bash-guard | [`hooks/bash-guard/README.md`](hooks/bash-guard/README.md) | Blocks dangerous shell commands. Security hardening log: [`HARDENING.md`](hooks/bash-guard/HARDENING.md). |
+| path-guard | [`hooks/path-guard/README.md`](hooks/path-guard/README.md) | Zone enforcement + `[secret]`/`[protected]` rules across every tool. Security hardening log: [`HARDENING.md`](hooks/path-guard/HARDENING.md). |
+| read-guard | [`hooks/read-guard/README.md`](hooks/read-guard/README.md) | Steers file-read shell commands through the Read tool. |
+| read-once | [`hooks/read-once/README.md`](hooks/read-once/README.md) | Read-tracking, deterministic invalidation, diff mode. |
+| session-scratch | [`hooks/session-scratch/README.md`](hooks/session-scratch/README.md) | Per-session `$CLAUDE_SESSION_SCRATCH` lifecycle and 7-day GC. |
 
 ## Installation
 
