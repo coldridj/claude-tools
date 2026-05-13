@@ -1,16 +1,36 @@
 #!/usr/bin/env bash
-# Squash $SOURCE_BRANCH (default: main) into a single root commit and
-# force-push to origin/github-mirror. The github-mirror branch carries no
-# claude-tools history — each run produces a fresh single-commit snapshot,
-# so the public GitHub mirror exposes only the current tree.
+# Squash a source revision into a single root commit and force-push to
+# origin/github-mirror. The github-mirror branch carries no claude-tools
+# history — each run produces a fresh single-commit snapshot, so the
+# public GitHub mirror exposes only the current tree.
 #
-# Usage: scripts/push-github-mirror.sh [source-branch]
+# Usage:
+#   scripts/push-github-mirror.sh                  # mirror main; requires local main == origin/main
+#   scripts/push-github-mirror.sh <branch>         # mirror <branch>; requires local <branch> == origin/<branch>
+#   scripts/push-github-mirror.sh --sha <sha>      # mirror exact <sha>, no sync check
+#                                                    (intended for the pre-push hook, where the SHA
+#                                                     is about to be pushed but is not yet on origin)
 
 set -euo pipefail
 
-SOURCE_BRANCH="${1:-main}"
 MIRROR_BRANCH="github-mirror"
 REMOTE="origin"
+
+SOURCE_LABEL=""
+SOURCE_SHA=""
+SKIP_SYNC_CHECK=0
+
+if [ "${1:-}" = "--sha" ]; then
+  if [ -z "${2:-}" ]; then
+    echo "error: --sha requires a value." >&2
+    exit 2
+  fi
+  SOURCE_LABEL="$2"
+  SOURCE_SHA="$2"
+  SKIP_SYNC_CHECK=1
+else
+  SOURCE_LABEL="${1:-main}"
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
@@ -21,14 +41,18 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
   exit 1
 fi
 
-git fetch "$REMOTE" "$SOURCE_BRANCH"
-
-SOURCE_SHA="$(git rev-parse "$SOURCE_BRANCH")"
-REMOTE_SHA="$(git rev-parse "$REMOTE/$SOURCE_BRANCH")"
-if [ "$SOURCE_SHA" != "$REMOTE_SHA" ]; then
-  echo "error: local $SOURCE_BRANCH ($SOURCE_SHA) differs from $REMOTE/$SOURCE_BRANCH ($REMOTE_SHA)." >&2
-  echo "       push $SOURCE_BRANCH before mirroring so the mirror matches what is published." >&2
-  exit 1
+if [ "$SKIP_SYNC_CHECK" -eq 0 ]; then
+  git fetch "$REMOTE" "$SOURCE_LABEL"
+  SOURCE_SHA="$(git rev-parse "$SOURCE_LABEL")"
+  REMOTE_SHA="$(git rev-parse "$REMOTE/$SOURCE_LABEL")"
+  if [ "$SOURCE_SHA" != "$REMOTE_SHA" ]; then
+    echo "error: local $SOURCE_LABEL ($SOURCE_SHA) differs from $REMOTE/$SOURCE_LABEL ($REMOTE_SHA)." >&2
+    echo "       push $SOURCE_LABEL before mirroring so the mirror matches what is published." >&2
+    exit 1
+  fi
+else
+  # Validate the SHA exists locally as a commit; fail early otherwise.
+  SOURCE_SHA="$(git rev-parse --verify "$SOURCE_SHA^{commit}")"
 fi
 
 GIT_DIR="$(git rev-parse --git-dir)"
@@ -48,8 +72,8 @@ git worktree add --detach "$WORKTREE" "$SOURCE_SHA"
   cd "$WORKTREE"
   git checkout --orphan "$MIRROR_BRANCH"
   git add -A
-  git commit -m "Snapshot of $SOURCE_BRANCH @ $SOURCE_SHA"
+  git commit -m "Snapshot of $SOURCE_LABEL @ $SOURCE_SHA"
   git push --force "$REMOTE" "$MIRROR_BRANCH"
 )
 
-echo "Pushed $REMOTE/$MIRROR_BRANCH @ snapshot of $SOURCE_BRANCH ($SOURCE_SHA)."
+echo "Pushed $REMOTE/$MIRROR_BRANCH @ snapshot of $SOURCE_LABEL ($SOURCE_SHA)."
