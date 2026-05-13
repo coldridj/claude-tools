@@ -249,7 +249,7 @@ if [ -n "$CACHED_MTIME" ] && [ "$CACHED_MTIME" = "$CURRENT_MTIME" ]; then
     INVAL_NOTE="Cache cleared on /compact, /clear, or resume."
   fi
 
-  REASON="read-once: ${BASENAME} (~${ESTIMATED_TOKENS} tokens) already in context (read ${MINUTES_AGO}m ago, unchanged). ${INVAL_NOTE} Session savings: ~${SESSION_SAVED} tokens${COST_INFO}."
+  REASON="read-once: ${BASENAME} (~${ESTIMATED_TOKENS} tokens) already in context (read ${MINUTES_AGO}m ago, unchanged) — refer to the earlier read rather than re-fetching. ${INVAL_NOTE} Session savings: ~${SESSION_SAVED} tokens${COST_INFO}."
 
   if [ "$MODE" = "deny" ]; then
     # Hard block — saves tokens but breaks Edit tool and parallel reads.

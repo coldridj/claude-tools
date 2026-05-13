@@ -62,6 +62,15 @@ exist yet. Group entries under one of:
 
 ### Changed
 
+- **`hooks/bash-guard/hook.sh`:** `block()` now appends a meta-warning
+  telling the agent not to retry with an equivalent command (`shred` for
+  `rm`, `nc` for `curl`, `bash <<<` for `bash -c`, base64-decode-to-shell).
+  Lets the project CLAUDE.md drop its `## bash-guard interaction` section
+  in favour of just-in-time guidance from the hook itself.
+- **`hooks/read-once/hook.sh`:** advisory `REASON` now explicitly tells
+  the agent to refer to the earlier read rather than re-fetching, so the
+  rule arrives only when the cache hit fires. Lets CLAUDE.md drop the
+  `## read-once interaction` section.
 - **`README.md`:** prominent disclaimer that most of the code is
   AI-generated and unaudited (hardening passes are real, but the
   underlying code is not security-audited — treat as defence in depth,

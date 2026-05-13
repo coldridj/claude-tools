@@ -156,6 +156,7 @@ block() {
     msg="$msg Suggestion: $suggestion"
   fi
   printf '%s\n' "$msg" >&2
+  printf 'Do not retry with an equivalent command (shred for rm, nc for curl, bash <<< for bash -c, base64-decode-to-shell). The hardening pass already covers common workarounds; chasing them only produces a longer block trail. If the operation is legitimately needed, add an `allow:` to .bash-guard or ask the user to run it themselves.\n' >&2
   exit 2
 }
 
