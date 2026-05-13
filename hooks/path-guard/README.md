@@ -35,7 +35,12 @@ Two sections inside each layered config file:
 
 When path-guard blocks a write, the error message tells the agent to put
 the new content in `$CLAUDE_SESSION_SCRATCH/<basename>.new` and prompt the
-user to `mv` it into place. The same workflow applies to any
+user to `mv` it into place. The message is five lines: a `path-guard:
+cannot write …` header (with the rule reason inline), a `To proceed:`
+workflow line, the `mv` command, a parenthetical explaining why the
+repo-relative path is shown instead of `$CLAUDE_SESSION_SCRATCH`, and a
+final `Do not retry.`. If the target is executable, an extra
+`chmod +x` line is appended. The same workflow applies to any
 shell-driven write the backstop refuses.
 
 ## Configuration
@@ -142,7 +147,7 @@ defeat, but it wastes a turn each time.
 
 ````markdown
 **Write-blocked files: scratch + prompt.** When `path-guard` blocks a
-write (the hook prints `path-guard: writing "..." is not allowed`), do
+write (the hook prints `path-guard: cannot write "..." — <reason>`), do
 not retry or attempt to bypass. Instead:
 
 1. Write the intended new content to `$CLAUDE_SESSION_SCRATCH/<basename>.new`

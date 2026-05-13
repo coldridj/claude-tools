@@ -71,6 +71,19 @@
 # delimiter form, printf escape construction) use the newline-only
 # variant ($COMMAND_NORM) instead. The original literal is kept in
 # $COMMAND_ORIG for diagnostic logging.
+#
+# Block-message format:
+#   bash-guard: <reason>
+#   Suggestion: <safer alternative>           (omitted if no suggestion)
+#   Override: add 'allow: <key>' to .bash-guard.   (omitted if no key)
+#   Do not retry with an equivalent command (...).
+#   The hardening pass covers common workarounds; chasing them just produces a longer block trail.
+#   If the operation is needed, add the allow above or ask the user to run it.
+#
+# Per-rule call sites pass the allow key in their suggestion text (e.g.
+# ", or add 'allow: <key>' to .bash-guard."). The block() function extracts
+# the key automatically and strips the redundant suffix from the suggestion
+# so the Override: line is the only place it appears in the output.
 
 set -euo pipefail
 
@@ -151,12 +164,35 @@ is_allowed() {
 block() {
   local reason="$1"
   local suggestion="${2:-}"
-  local msg="bash-guard: $reason"
-  if [ -n "$suggestion" ]; then
-    msg="$msg Suggestion: $suggestion"
+  local allow_key="${3:-}"
+
+  # Backward-compat: if allow_key wasn't passed but the suggestion mentions
+  # an 'allow: KEY' override, extract the key and strip the suffix so the
+  # cleaned suggestion does not repeat what the Override: line will say.
+  local _allow_pat="'allow: ([^']+)'"
+  if [ -z "$allow_key" ] && [[ "$suggestion" =~ $_allow_pat ]]; then
+    allow_key="${BASH_REMATCH[1]}"
+    # Strip "<sep>or add 'allow: ...' to .bash-guard..." onward. Bash glob in
+    # ${var%pat} treats `*` as a wildcard but single quote as a literal.
+    local _strip1=", or add 'allow: *"
+    local _strip2=". Or add 'allow: *"
+    local _strip3=" Or add 'allow: *"
+    suggestion="${suggestion%$_strip1}"
+    suggestion="${suggestion%$_strip2}"
+    suggestion="${suggestion%$_strip3}"
+    # If the entire suggestion was the "Add 'allow: KEY' to .bash-guard ..."
+    # boilerplate (no other content), blank it so only the Override line shows.
+    case "$suggestion" in
+      "Add 'allow: "*) suggestion="" ;;
+    esac
   fi
-  printf '%s\n' "$msg" >&2
-  printf 'Do not retry with an equivalent command (shred for rm, nc for curl, bash <<< for bash -c, base64-decode-to-shell). The hardening pass already covers common workarounds; chasing them only produces a longer block trail. If the operation is legitimately needed, add an `allow:` to .bash-guard or ask the user to run it themselves.\n' >&2
+
+  printf 'bash-guard: %s\n' "$reason" >&2
+  [ -n "$suggestion" ] && printf 'Suggestion: %s\n' "$suggestion" >&2
+  [ -n "$allow_key" ] && printf "Override: add 'allow: %s' to .bash-guard.\n" "$allow_key" >&2
+  printf 'Do not retry with an equivalent command (shred for rm, nc for curl, bash <<< for bash -c).\n' >&2
+  printf 'The hardening pass covers common workarounds; chasing them just produces a longer block trail.\n' >&2
+  printf 'If the operation is needed, add the allow above or ask the user to run it.\n' >&2
   exit 2
 }
 

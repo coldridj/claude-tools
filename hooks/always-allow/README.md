@@ -11,15 +11,15 @@ normal permission flow (and any other PreToolUse hooks downstream).
 ## What it never auto-allows
 
 Regardless of the configured patterns, the hook explicitly *does not*
-auto-allow:
+auto-allow commands containing `&&`, `||`, `;`, `|`, or newlines —
+multi-statement chains can smuggle a dangerous payload after a benign
+prefix. These always fall through to the prompt or to other guards
+(`bash-guard`, `path-guard`).
 
-- Commands containing `&&`, `||`, `;`, `|`, or newlines — multi-statement
-  chains can smuggle a dangerous payload after a benign prefix.
-- Background commands (`tool_input.run_in_background = true`) — same risk
-  in a different form.
-
-These always fall through to the prompt or to other guards (`bash-guard`,
-`path-guard`).
+Background commands (`tool_input.run_in_background = true`) are auto-
+allowed **only** when they match a pattern in the `[background]` section
+(see below). Patterns in the default `[allow]` section never match a
+background invocation, even if the command text would otherwise.
 
 ## Configuration
 
@@ -31,18 +31,47 @@ Layered config files, all concatenated:
 | `~/.claude/.always-allow` | Per-user defaults across all projects. |
 | `$CLAUDE_PROJECT_DIR/.always-allow` | Project-specific patterns. |
 
-Each line is a POSIX ERE pattern. Blank lines and `#` comments are ignored.
-A command is auto-allowed if it matches any line. There is no `!` negation —
-to drop a default rule, comment it out in `default.always-allow` rather than
-add an override.
+Each line is a POSIX ERE pattern. Blank lines and `#` comments are
+ignored. A command is auto-allowed if it matches any line in a section
+the invocation is eligible for. There is no `!` negation — to drop a
+default rule, comment it out in `default.always-allow` rather than add
+an override.
+
+### Sections
+
+Patterns are grouped into named sections. Two are recognised:
+
+| Section | Eligible invocations |
+| --- | --- |
+| `[allow]` | Foreground single-command only. **Default section** for any unlabeled lines, so existing flat-list configs keep working unchanged. |
+| `[background]` | Foreground **and** background single commands. Use sparingly: a background process can hide chained payloads inside a script. Reserve for trusted long-running launchers (dev servers, watchers, file daemons). |
+
+`[bg]` is accepted as an alias for `[background]`. Unknown section
+headers are silently skipped (the patterns under them never match).
+Section headers must be lowercase and on their own line — `[BACKGROUND]`
+is rejected by the strict `^\[([a-z]+)\]$` parser.
 
 Example project `.always-allow`:
 
-```regex
+```ini
+[allow]
 # Project build scripts that this agent runs frequently.
 ^(bash )?scripts/build[[:alnum:]_-]*\.sh
-^(bash )?scripts/run\.sh
 ^npm run (test|lint|typecheck)$
+
+[background]
+# Long-running launchers — auto-allowed in both fg and bg.
+^(bash )?scripts/run\.sh
+^npm run dev$
+```
+
+Flat configs (no section headers) still work — every line routes to the
+implicit `[allow]` section:
+
+```regex
+# Equivalent to a single [allow] section.
+^npm test$
+^pytest( |$)
 ```
 
 ## Env vars
@@ -68,10 +97,13 @@ considered safe enough to add to `.always-allow` in the first place:
 ````markdown
 **Auto-allowed commands live in `.always-allow`.** Project commands the
 agent runs frequently (build scripts, `npm test`, `pytest`, etc.) belong
-in `$CLAUDE_PROJECT_DIR/.always-allow` so the permission prompt does not
-fire on every invocation. Anything destructive, anything that touches
-secrets, and anything that spawns multiple statements must stay out of
-this file — the `always-allow` hook itself never auto-allows commands
-containing `&&`, `||`, `;`, `|`, newlines, or `run_in_background`, but a
-loose entry in `.always-allow` still grants single-statement variants.
+in `$CLAUDE_PROJECT_DIR/.always-allow` under an `[allow]` section so the
+permission prompt does not fire on every invocation. Long-running
+launchers that need to be auto-allowed in the background as well
+(`run_in_background: true`) belong under `[background]` instead — be
+sparing here, since a background script can hide chained payloads.
+Anything destructive or anything that touches secrets must stay out of
+this file entirely. The `always-allow` hook itself never auto-allows
+commands containing `&&`, `||`, `;`, `|`, or newlines regardless of
+section, but a loose entry still grants single-statement variants.
 ````

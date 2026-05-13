@@ -13,6 +13,73 @@ exist yet. Group entries under one of:
 - **Fixed** — bug fixes
 - **Security** — security hardening / jailbreak closures
 
+Bug fixes that close a `BUGS.md` entry move out of `BUGS.md` into the
+relevant `Fixed`/`Added` section here, so this file is the authoritative
+record of what was resolved.
+
+## 2026-05-14
+
+### Added
+
+- **`hooks/session-scratch/test.sh`** — first test suite for the
+  session-scratch hook. 24 tests cover SessionStart `mkdir -p`,
+  `touch`-bumped mtime, `$CLAUDE_ENV_FILE` export (with append-not-
+  overwrite semantics), the 7-day GC sweep, GC preservation of recent
+  entries and the just-created session dir, SessionEnd `rm -rf`,
+  silent pass-through on missing `session_id` / `hook_event_name` /
+  unknown event, custom `$CLAUDE_SCRATCH_ROOT`, and `$CLAUDE_PROJECT_DIR`
+  fallback to `$PWD`. Closes the `[ ] No test.sh at all` BUGS.md entry.
+
+### Changed
+
+- **`hooks/bash-guard/hook.sh`:** `block()` now auto-extracts the allow
+  key from each rule's suggestion text and prints it on a labelled
+  `Override: add 'allow: <key>' to .bash-guard.` line, instead of
+  leaving it buried mid-sentence on every rule. The redundant
+  `, or add 'allow: <key>' to .bash-guard.` suffix is stripped from
+  the suggestion automatically, so the override appears exactly once.
+  Per-rule call sites unchanged (~90 sites left untouched). The
+  trailing "Do not retry" paragraph was rewritten as three short lines
+  for memorability.
+- **`hooks/path-guard/hook.sh`:** `block_write` message condensed from
+  ~12 lines to ~5. The header now includes the rule reason inline
+  (`path-guard: cannot write "<target>" — <reason>`), followed by a
+  one-line `To proceed:` workflow, the `mv` command, a parenthetical
+  explaining the repo-relative path, and `Do not retry.`. The
+  executable-bit advisory is appended on a single line when relevant.
+- **`hooks/read-guard/hook.sh`:** `block()` simplified to single-arg.
+  The `Suggestion:` line is gone for `cat`/`awk`/`grep`/etc. cases
+  where it just restated "use Read tool"; the offset/limit hint is
+  inlined into the main message for `head`/`tail` and `sed`.
+- **`hooks/always-allow/README.md`:** documents the `[allow]` /
+  `[background]` (and `[bg]` alias) section system that the hook has
+  shipped since the section split. The "What it never auto-allows"
+  section no longer claims all background commands are blocked
+  (`[background]` patterns DO match background invocations). The
+  CLAUDE.md-suggestion block is updated to direct project commands to
+  `[allow]` and trusted long-running launchers to `[background]`.
+- **`hooks/{read,path,bash}-guard/README.md`:** CLAUDE.md-suggestion
+  blocks updated to match the new message wording above. Read-guard's
+  suggestion block also picks up the `xxd`/`bat`/`strings` tools in the
+  Read-tool list.
+- **`hooks/session-scratch/README.md`:** CLAUDE.md-suggestion block
+  reinforced to be explicit that writes go to the per-session subdir
+  (`.scratch/<session-id>/<file>`), never directly under the scratch
+  root. Includes a wrong/right example and an explicit
+  cross-session-persistence exception (named subdirs only).
+- **`BUGS.md`:** stripped down to open `[ ]` items only. Resolved
+  entries are now logged here in CHANGELOG instead of accumulating
+  stale `[x]` checkmarks in BUGS.md.
+
+### Fixed
+
+- **`hooks/session-scratch/hook.sh`:** SessionStart now `touch`es the
+  per-session dir after `mkdir -p` so the 7-day GC step does not nuke
+  the scratch of a `--resume`d session whose dir is already older
+  than 7 days. The previous comment claimed `mkdir -p` bumped mtime,
+  which is wrong — `mkdir -p` is a no-op on an existing dir. Caught by
+  the new `test.sh`.
+
 ## 2026-05-13
 
 ### Added
@@ -26,6 +93,32 @@ exist yet. Group entries under one of:
   install and update instructions now use this flow. Refresh on the
   consumer side needs `git fetch --tags --force origin` because `latest`
   is a moving tag.
+- **`scripts/push-github-mirror.sh`** — squashes a source revision into a
+  single root commit and force-pushes to `origin/github-mirror`, so a
+  Forgejo-→-GitHub mirror exposes only the current tree (no internal
+  history). Used by the new pre-push hook for automatic mirroring;
+  re-runnable manually for ad-hoc snapshots.
+- **`scripts/git-hooks/pre-push`** — triggers `push-github-mirror.sh`
+  automatically when `main` is pushed to `origin`. Mirror commit is
+  pushed before the main push completes, so a single `git push` keeps
+  the mirror in sync.
+- **`scripts/install-hooks.sh`** — symlinks every entry under
+  `scripts/git-hooks/` into the checkout's `<gitdir>/hooks/` directory,
+  for both regular clones and submodule checkouts. Existing real hook
+  files are backed up before being replaced.
+- **`hooks/always-allow/test.sh`** — layered-config (default + user +
+  project) coverage via a new "Layered configs" section (5 tests + 4
+  follow-on context-isolation tests), plus a regression-pin test for
+  the silently-permissive `[xyz]` section-header parser documented in
+  `hooks/always-allow/HARDENING.md`.
+- **`hooks/bash-guard/test.sh`** — explicit `deny:` rule coverage. New
+  "Custom deny rules" section exercises `deny: rm`, `deny: unlink`,
+  `deny: find.*-delete` via `BASH_GUARD_CONFIG`, and confirms unrelated
+  commands still pass (six tests).
+- **`hooks/read-once/test.sh`** — `SessionStart(matcher=compact)`
+  fallback dispatch coverage and subagent-isolation probes (main /
+  subagent-A / subagent-B caches are independent within the same
+  session).
 
 ### Security
 
@@ -43,22 +136,6 @@ exist yet. Group entries under one of:
   realpath-resolved hook scripts (`claude-tools/hooks/**/{hook,compact}.sh`),
   and the submodule scripts/ tree (`claude-tools/scripts/**`). 17 new
   probes; all hold. See `hooks/path-guard/HARDENING.md`.
-
-### Added
-
-- **`scripts/push-github-mirror.sh`** — squashes a source revision into a
-  single root commit and force-pushes to `origin/github-mirror`, so a
-  Forgejo-→-GitHub mirror exposes only the current tree (no internal
-  history). Used by the new pre-push hook for automatic mirroring;
-  re-runnable manually for ad-hoc snapshots.
-- **`scripts/git-hooks/pre-push`** — triggers `push-github-mirror.sh`
-  automatically when `main` is pushed to `origin`. Mirror commit is
-  pushed before the main push completes, so a single `git push` keeps
-  the mirror in sync.
-- **`scripts/install-hooks.sh`** — symlinks every entry under
-  `scripts/git-hooks/` into the checkout's `<gitdir>/hooks/` directory,
-  for both regular clones and submodule checkouts. Existing real hook
-  files are backed up before being replaced.
 
 ### Changed
 
@@ -96,6 +173,29 @@ exist yet. Group entries under one of:
   worktree's HEAD onto `github-mirror`. The script now unsets those
   vars at entry and creates the temp worktree via `mktemp -d` (outside
   the gitdir).
+- **`hooks/always-allow/test.sh`:** test suite no longer depends on the
+  caller's `$CLAUDE_PROJECT_DIR`. All 74 tests now go through an
+  isolated `run_isolated` helper that sets `HOME`, `CLAUDE_PROJECT_DIR`,
+  and `ALWAYS_ALLOW_HOOK_DIR` per case; the top of test.sh exports
+  `CLAUDE_PROJECT_DIR=/nonexistent-test-project` as a belt-and-braces
+  fallback.
+- **`hooks/read-once/test.sh`:** `PostCompact` dispatch was silently
+  skipped because the test referenced a `compact.sh` file that no
+  longer exists after the compact.sh→hook.sh merge. The dispatcher
+  now points at `hook.sh` and the `if [ -f … ]` guard is removed.
+- **`hooks/read-once/test.sh`:** Test 10 (TTL expiry) was asserting
+  upstream wording (`"Re-read allowed after Xm"`) and probing the
+  upstream `session-<hash>.jsonl` cache layout. The check was rewritten
+  against the current `<scratch>/<sid>/read-once/<agent>.jsonl` layout
+  and folded into Test 11.
+- **`hooks/read-once/test.sh`:** Groups 20 and 21 (upstream `./read-once`
+  CLI assertions) removed — those tested the upstream installer rather
+  than the hook itself.
+- **`hooks/read-once/test.sh`:** cost-info string in advisory was
+  flaky because `make_input` did not emit a `hook_event_name:
+  "PreToolUse"` field; without it the merged hook's case statement
+  exited at `*) exit 0 ;;` and produced no output. Adding the field
+  made the Sonnet-cost assertion deterministic.
 
 ### Removed
 

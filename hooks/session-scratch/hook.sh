@@ -6,6 +6,10 @@
 #
 # SessionStart:
 #   - mkdir -p $CLAUDE_PROJECT_DIR/$CLAUDE_SCRATCH_ROOT/<session_id>
+#   - touch the dir so its mtime is "now" (mkdir -p is a no-op on an
+#     existing dir and would not refresh mtime — without the touch, a
+#     `--resume` of a session older than 7 days would have its scratch
+#     swept by the GC step below).
 #   - export CLAUDE_SESSION_ID and CLAUDE_SESSION_SCRATCH via $CLAUDE_ENV_FILE
 #     so subsequent Bash tool invocations see them
 #   - GC: remove anything directly under the scratch root (top-level files or
@@ -42,6 +46,12 @@ SESSION_SCRATCH="$SCRATCH_ROOT/$SESSION_ID"
 case "$EVENT" in
   SessionStart)
     mkdir -p "$SESSION_SCRATCH"
+    # Bump mtime so the 7-day GC below cannot sweep this dir on resume.
+    # `mkdir -p` is a no-op on an existing dir and does NOT update the
+    # mtime — without the explicit touch, a `--resume` of a session
+    # whose dir is >7 days old would have its scratch nuked by the
+    # find -mtime +7 below.
+    touch "$SESSION_SCRATCH"
 
     if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
       {
@@ -51,7 +61,7 @@ case "$EVENT" in
     fi
 
     # GC: anything directly under the scratch root older than 7 days.
-    # mkdir above bumps this session's dir mtime, so it is never swept.
+    # The touch above bumps this session's mtime, so it is never swept.
     find "$SCRATCH_ROOT" -mindepth 1 -maxdepth 1 -mtime +7 \
       -exec rm -rf {} + 2>/dev/null || true
     ;;

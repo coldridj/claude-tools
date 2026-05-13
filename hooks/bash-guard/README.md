@@ -129,6 +129,24 @@ When bash-guard blocks a command, it uses the most conservative deny path Claude
 
 For allowed commands, bash-guard stays silent and exits `0`.
 
+When a command is blocked, the message takes a fixed shape:
+
+```
+bash-guard: <reason>
+Suggestion: <safer alternative>           (omitted if no suggestion)
+Override: add 'allow: <key>' to .bash-guard.   (omitted if no key)
+Do not retry with an equivalent command (shred for rm, nc for curl, bash <<< for bash -c).
+The hardening pass covers common workarounds; chasing them just produces a longer block trail.
+If the operation is needed, add the allow above or ask the user to run it.
+```
+
+The `Override:` line is the single canonical place the allow key
+appears. Per-rule call sites still embed the old "..., or add 'allow: X'
+to .bash-guard." form in their suggestion text, but the `block()`
+function extracts the key and strips that suffix before printing — so
+the override is shown once, on its own labelled line, instead of being
+buried mid-sentence on every rule.
+
 ## Test
 
 ```bash
@@ -148,14 +166,15 @@ bash-guard block as a hard stop rather than a puzzle to route around.
 
 ````markdown
 **Blocked bash commands: stop and ask, do not work around.** When
-`bash-guard` blocks a command (the hook prints `bash-guard: <reason>`
-and the suggestion line), do not retry with an equivalent alternative
-(`shred` for `rm`, `nc` for `curl`, `bash <<<` for `bash -c`, base64-
-decode-to-shell, etc.). The hook's hardening pass covers the common
-workarounds; chasing them just produces a longer block trail. Either
-add the relevant `allow:` to `.bash-guard` after confirming the
-operation is safe in this project, or ask the user to run the command
-themselves.
+`bash-guard` blocks a command, the hook prints a `bash-guard: <reason>`
+line followed by an `Override: add 'allow: <key>' to .bash-guard.`
+line. Do not retry with an equivalent alternative (`shred` for `rm`,
+`nc` for `curl`, `bash <<<` for `bash -c`, base64-decode-to-shell,
+etc.). The hook's hardening pass covers the common workarounds;
+chasing them just produces a longer block trail. Either add the
+relevant `allow:` key shown in the `Override:` line to `.bash-guard`
+after confirming the operation is safe in this project, or ask the
+user to run the command themselves.
 ````
 
 For project-wide allow lists, edit `$CLAUDE_PROJECT_DIR/.bash-guard`

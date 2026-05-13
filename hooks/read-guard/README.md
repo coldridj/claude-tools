@@ -76,10 +76,9 @@ often falls back to `cat` / `head` / `grep` for reading, which
 read-guard then has to bounce on every attempt.
 
 ````markdown
-**Read files.** Always use the Read tool instead of using a bash command
-to read files. Always use the Read tool instead of `cat`, `head`,
-`tail`, `sed`, `awk`, `grep`, `cut` etc. — `read-guard` enforces this
-and will block the command.
+**Read files.** Always use the Read tool, not bash commands like `cat`,
+`head`, `tail`, `sed`, `awk`, `grep`, `cut`, `xxd`, `bat`, `strings`.
+`read-guard` blocks these.
 
 **curl to file then Read.** Never pipe curl output to the terminal or
 to another command. Always redirect to a scratch file under

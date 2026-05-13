@@ -394,23 +394,14 @@ block_write() {
     /*) ;;
     *)  abs="$PROJECT_DIR/$abs" ;;
   esac
-  printf 'path-guard: writing "%s" is not allowed.\n' "$target" >&2
-  printf 'Reason: %s\n' "$reason" >&2
-  printf '\n' >&2
-  printf 'Workflow when you need to write to this file:\n' >&2
-  printf '  1. Write the new content to %s/<basename>.new.\n' "$scratch" >&2
-  printf '  2. Show the diff against the original.\n' >&2
-  printf '  3. Ask the user to run this command from the repo root:\n' >&2
-  printf '       mv %s/<basename>.new <target>\n' "$scratch_rel" >&2
-  printf '     Use the repo-relative path shown above, not "$CLAUDE_SESSION_SCRATCH"\n' >&2
-  printf '     — that variable is not exported in the user'"'"'s own shell.\n' >&2
+  printf 'path-guard: cannot write "%s" — %s\n' "$target" "$reason" >&2
+  printf 'To proceed: write to %s/<basename>.new, show the diff, then ask:\n' "$scratch" >&2
+  printf '  mv %s/<basename>.new <target>\n' "$scratch_rel" >&2
+  printf '(Use the repo-relative path; $CLAUDE_SESSION_SCRATCH is not exported in the user'"'"'s shell.)\n' >&2
   if [ -x "$abs" ] && [ -f "$abs" ]; then
-    printf '  4. Target is executable — also ask the user to run:\n' >&2
-    printf '       chmod +x <target>\n' >&2
-    printf '     The Write tool creates files as 0644 and mv preserves that\n' >&2
-    printf '     mode, so the executable bit must be restored after the move.\n' >&2
+    printf 'Target is executable: also ask: chmod +x <target> (Write creates 0644).\n' >&2
   fi
-  printf 'Do not retry the blocked operation.\n' >&2
+  printf 'Do not retry.\n' >&2
   exit 2
 }
 

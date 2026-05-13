@@ -42,7 +42,6 @@ fi
 
 block() {
   printf 'read-guard: %s\n' "$1" >&2
-  printf 'Suggestion: %s\n' "$2" >&2
   exit 2
 }
 
@@ -97,41 +96,31 @@ done
 # cat/less/more/bat/strings/sort/tac/nl/od/xxd/hexdump used to read a file (not stdin)
 # Matches: cat file, cat file | ..., cat -n file — but not plain `cat` (stdin)
 if echo "$COMMAND" | grep -qE '(^|;[[:space:]]*|&&[[:space:]]*|\|\|[[:space:]]*)(cat|less|more|bat|strings|tac|nl|od|xxd|hexdump|sort)\s+(-[a-zA-Z]+\s+)?[^|&;>[:space:]]' 2>/dev/null; then
-  block \
-    "cat/less/more/bat/strings/sort/tac/nl/od/xxd/hexdump used to read a file. Use the Read tool instead." \
-    "Replace with the Read tool, which provides structured line-numbered output."
+  block "cat/less/more/bat/strings/sort/tac/nl/od/xxd/hexdump used to read a file. Use the Read tool instead."
 fi
 
 # head / tail reading a named file
 if echo "$COMMAND" | grep -qE '(^|;[[:space:]]*|&&[[:space:]]*|\|\|[[:space:]]*)(head|tail)\s+(-[a-zA-Z0-9]+\s+)*[^|&;>[:space:]-]' 2>/dev/null; then
-  block \
-    "head/tail used to read a file. Use the Read tool with offset/limit instead." \
-    "Read tool accepts 'offset' and 'limit' parameters to read specific line ranges."
+  block "head/tail used to read a file. Use the Read tool with offset/limit instead."
 fi
 
 # sed used to read/extract (without -i in-place flag — that's already caught by bash-guard)
 if echo "$COMMAND" | grep -qE '(^|;[[:space:]]*|&&[[:space:]]*|\|\|[[:space:]]*)sed\s+' 2>/dev/null; then
   if ! echo "$COMMAND" | grep -qE 'sed\s+(-[A-Za-z]*i|-i[^[:space:]]*)' 2>/dev/null; then
-    block \
-      "sed used to process file content. Use the Read tool to read files." \
-      "Use the Read tool with offset/limit to read specific ranges, then process in your response."
+    block "sed used to read file content. Use the Read tool (with offset/limit if needed)."
   fi
 fi
 
 # awk reading a file (awk pattern file or awk -F... file)
 if echo "$COMMAND" | grep -qE "(^|;[[:space:]]*|&&[[:space:]]*|\|\|[[:space:]]*)awk\s+" 2>/dev/null; then
-  block \
-    "awk used to process file content. Use the Read tool to read files." \
-    "Use the Read tool to read the file, then reference specific lines in your response."
+  block "awk used to read file content. Use the Read tool instead."
 fi
 
 # grep/rg/ag/cut invoked directly (not as a pipeline filter after |).
 # Pipeline filters are allowed: `cmd | grep foo` is fine, but `grep foo file` is not.
 # Anchor excludes `|` so `| grep` passes through; `;`, `&&`, `||` still block.
 if echo "$COMMAND" | grep -qE '(^|;[[:space:]]*|&&[[:space:]]*|\|\|[[:space:]]*)(grep|egrep|fgrep|rg|ag|cut)[[:space:]]+' 2>/dev/null; then
-  block \
-    "grep/rg/ag/cut used to read file content directly. Use the Read tool instead." \
-    "Read the file with the Read tool, then search or filter within your context."
+  block "grep/rg/ag/cut used to read file content directly. Use the Read tool instead."
 fi
 
 exit 0

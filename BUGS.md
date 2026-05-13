@@ -1,29 +1,12 @@
 # Known issues — test coverage gaps
 
-Tracker for hook test-coverage gaps identified during the audit on
-2026-05-13. Each entry has a status box; mark `[x]` when fixed and link
-to the commit in the trailing note. Entries are grouped by hook, then
-by severity (highest first).
+Tracker for open hook test-coverage gaps. Each entry has a `[ ]` checkbox;
+when fixed, move the entry to `CHANGELOG.md` rather than ticking it here
+(this file stays focused on what still needs attention). Entries are
+grouped by hook, then by severity (highest first).
 
 ## always-allow
 
-- [x] **Test suite depended on `CLAUDE_PROJECT_DIR` being set externally.**
-  Earlier rewrite added section parsing tests via an isolated `run_isolated`
-  helper but left 9 integration tests using a `run_hook` form that fell
-  back to `$PWD/.always-allow`. **Fixed:** all 74 tests now go through
-  the isolated helper (which sets `HOME`, `CLAUDE_PROJECT_DIR`, and
-  `ALWAYS_ALLOW_HOOK_DIR` per case), plus the test.sh top exports
-  `CLAUDE_PROJECT_DIR=/nonexistent-test-project` so a forgetful future
-  test cannot accidentally pick up the caller's config.
-- [x] **Layered-config (default + user + project) had no coverage.** Same
-  three-file overlay as the other guards. **Fixed:** new "Layered configs"
-  section in test.sh exercises each layer in isolation and all three
-  together (5 tests + 4 follow-on context-isolation tests).
-- [x] **Section header parser is silently permissive about malformed
-  brackets.** A bare `[xyz]` line is treated as a section header even
-  when the user intended an ERE char-class pattern, losing the pattern.
-  Documented in `hooks/always-allow/HARDENING.md` with a regression-pin
-  test in test.sh.
 - [ ] **`jq` failure aborts the hook hard.** If `jq` is missing from
   `$PATH`, `set -euo pipefail` causes the whole hook to exit non-zero;
   the harness then treats the call as blocked. The hook should pre-check
@@ -39,50 +22,7 @@ by severity (highest first).
   absolute paths, and `bash -c "scripts/build.sh"` do not match common
   patterns. Documented in `hooks/always-allow/HARDENING.md` (matcher).
 
-## session-scratch
-
-- [ ] **No `test.sh` at all.** The hook has zero coverage. Uncovered:
-  - SessionStart `mkdir -p` of the per-session dir
-  - SessionStart `export CLAUDE_SESSION_ID` / `CLAUDE_SESSION_SCRATCH` to `$CLAUDE_ENV_FILE`
-  - SessionStart 7-day GC sweep at the top level of `$CLAUDE_SCRATCH_ROOT/`
-  - SessionEnd `rm -rf` of the per-session dir
-  - Empty / missing `session_id` or `hook_event_name` guards
-  - `$CLAUDE_SCRATCH_ROOT` env-var override (default `.scratch`)
-  - `$CLAUDE_PROJECT_DIR` fallback to `$PWD`
-
 ## read-once
-
-- [x] **PostCompact dispatch is silently skipped.** `test.sh` referenced
-  `$COMPACT_HOOK="$SCRIPT_DIR/compact.sh"` and wrapped the entire
-  PostCompact block in `if [ -f "$COMPACT_HOOK" ]; then …`. After the
-  compact.sh → hook.sh merge, the file no longer existed; the `if`
-  was always false, so every PostCompact assertion was skipped without
-  reporting it. **Fixed:** dispatcher now points at `hook.sh`, guard
-  removed.
-- [x] **`SessionStart(matcher=compact)` has zero coverage.** **Fixed:**
-  new probes exercise the SessionStart-fallback dispatch path.
-- [x] **Test 10 (TTL expiry) has stale assertions / upstream layout.**
-  **Fixed:** Test 10 removed (it asserted the upstream "Re-read allowed
-  after Xm" wording and probed the upstream `session-<hash>.jsonl`
-  cache layout). The expired-event-in-stats check was folded into
-  Test 11 (custom TTL), which exercises the same path with the
-  current `<scratch>/<sid>/read-once/<agent>.jsonl` layout.
-- [x] **Group 20 / Group 21 reference an upstream `./read-once` CLI**
-  that doesn't exist in this fork at that path. **Fixed:** Groups 20
-  and 21 removed; their probes were testing the upstream installer
-  rather than the hook itself.
-- [x] **Subagent isolation is untested.** **Fixed:** `make_input` gained
-  an `agent_id` parameter, new probes exercise main/subagent-A/
-  subagent-B caches being independent in the same session.
-- [x] **Cost-info string in advisory (Group 19) is flaky.** Resolved by
-  fixing the bigger framing issue: `make_input` now emits a
-  `hook_event_name: "PreToolUse"` field. Without it the merged hook's
-  case statement exited at the `*) exit 0 ;;` branch and produced no
-  output at all, which was the root cause of cost-info appearing
-  missing in some runs. The Sonnet-cost assertion now passes
-  deterministically.
-
-### Newly-introduced test gaps (post-fix)
 
 - [ ] **`$CLAUDE_PROJECT_DIR` is now exported from the top of `test.sh`**
   to keep the per-session cache isolated to `$TEST_DIR`. If any future
@@ -110,9 +50,6 @@ by severity (highest first).
 - [ ] **Layered config files are not exercised.** Same default-only
   pattern as path-guard. `$HOME/.claude/.bash-guard` and
   `$CLAUDE_PROJECT_DIR/.bash-guard` load order / merge are not tested.
-- [ ] **Custom `deny:` rules are not explicitly tested.** The hook
-  supports both `allow:` and `deny:` entries; only `allow:` has
-  visible coverage via `BASH_GUARD_CONFIG`.
 - [ ] **`COMMAND_NORM` / `COMMAND_FLAT` normalisation lacks unit
   tests.** Pass-2 added jailbreak probes; the normalisation functions
   themselves are not directly tested.
@@ -134,9 +71,10 @@ by severity (highest first).
   independently. There is no `hooks/test-all.sh` (or equivalent) that
   runs every hook's suite in sequence and reports a combined result.
   Hard to verify the whole suite before a `git push`.
-- [ ] **Layered-config testing is structurally absent across four
-  hooks** (always-allow, path-guard, read-guard, bash-guard). All four
-  use the same three-file concatenation pattern; a single shared test
-  harness (or a per-hook `<NAME>_USER_CONFIG` / `<NAME>_PROJECT_CONFIG`
-  env-var override, matching the existing `<NAME>_HOOK_DIR` knob) would
-  close all four gaps at once.
+- [ ] **Layered-config testing is structurally absent across three
+  hooks** (path-guard, read-guard, bash-guard). All three use the same
+  three-file concatenation pattern; a single shared test harness (or a
+  per-hook `<NAME>_USER_CONFIG` / `<NAME>_PROJECT_CONFIG` env-var
+  override, matching the existing `<NAME>_HOOK_DIR` knob) would close
+  all three gaps at once. always-allow now has layered-config coverage
+  via the `run_isolated` helper — that's the model to copy.

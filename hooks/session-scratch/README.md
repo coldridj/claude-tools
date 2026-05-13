@@ -121,14 +121,28 @@ per-session scratch directory consistently. The patterns assume the
 `session-scratch` hook is registered on SessionStart and SessionEnd.
 
 ````markdown
-**Per-session scratch.** Each session gets its own scratch subdirectory at
-`$CLAUDE_SCRATCH_ROOT/<session_id>/`, exported as `$CLAUDE_SESSION_SCRATCH`
-by the `session-scratch` hook. `CLAUDE_SCRATCH_ROOT` is set in
-`.claude/settings.json` (default: `.scratch`). Always write scratch files
-under `$CLAUDE_SESSION_SCRATCH/`, never directly under the scratch root —
-concurrent sessions would otherwise race on identical filenames. The
-per-session directory is removed on SessionEnd; entries older than 7 days
-at the top level of `$CLAUDE_SCRATCH_ROOT/` are swept on SessionStart.
+**Per-session scratch — always the subdir, never the root.** Each
+session gets its own scratch subdirectory at
+`$CLAUDE_SCRATCH_ROOT/<session_id>/`, exported as
+`$CLAUDE_SESSION_SCRATCH` by the `session-scratch` hook.
+`CLAUDE_SCRATCH_ROOT` is set in `.claude/settings.json` (default:
+`.scratch`).
+
+- **Always** write to `$CLAUDE_SESSION_SCRATCH/<file>` — i.e.
+  `.scratch/<session-id>/<file>`.
+- **Never** write directly under `$CLAUDE_SCRATCH_ROOT/`. Writing
+  `.scratch/foo.new` is wrong; the correct form is
+  `.scratch/<session-id>/foo.new`. The session-id segment is
+  non-negotiable even when path-guard's hint message echoes it back —
+  follow the literal path the hint shows you, do not collapse it.
+- **Exception — cross-session persistence.** Files that need to outlive
+  a single session live in named subdirs of the scratch root (e.g.
+  `.scratch/scripts/`, `.scratch/cache/`), never as bare files at the
+  root. Treat that as a deliberate decision, not a default.
+
+The per-session directory is removed on SessionEnd; entries older than
+7 days at the top level of `$CLAUDE_SCRATCH_ROOT/` are swept on
+SessionStart.
 
 **Repo-relative paths.** Never write to `/tmp`. All scratch files, output
 dirs, and test artefacts go inside the repo tree — scratch files
