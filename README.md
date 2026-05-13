@@ -31,8 +31,7 @@ order Claude Code uses when several hooks share a matcher.
 From the parent project's repo root:
 
 ```bash
-git submodule add ssh://git@forgejo.dev.vekter.uk:2222/jack/claude-tools.git \
-    git_modules/claude-tools
+git submodule add <repository path> git_modules/claude-tools
 ```
 
 The submodule can live at any path inside the superproject — `install.sh`
@@ -84,48 +83,234 @@ submodule's actual location, so they work whether claude-tools lives at
 The append is idempotent — re-running `install.sh` will not duplicate the
 entries.
 
-### 4. Wire the hooks in `.claude/settings.json`
+### 4. Wire the hooks + scratch env into `.claude/settings.json`
 
 The installer only creates symlinks; you still need to register each hook in
-`.claude/settings.json` under the appropriate matcher. See `hooks/README.md`
-for the recommended execution order; a minimal `settings.json` looks like:
+`.claude/settings.json` under the appropriate matcher and (optionally) set
+`CLAUDE_SCRATCH_ROOT` in the `env` block. A complete example wiring every hook
+in this repo:
 
 ```json
 {
+  "env": {
+    "CLAUDE_SCRATCH_ROOT": ".scratch"
+  },
   "hooks": {
     "PreToolUse": [
-      { "matcher": "",     "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/path-guard/hook.sh" }] },
-      { "matcher": "Read", "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/read-once/hook.sh" }] },
-      { "matcher": "Bash", "hooks": [
-        { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/bash-guard/hook.sh" },
-        { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/always-allow/hook.sh" },
-        { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/read-guard/hook.sh" }
-      ]}
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/path-guard/hook.sh" }
+        ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/read-once/hook.sh" }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/bash-guard/hook.sh" },
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/always-allow/hook.sh" },
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/read-guard/hook.sh" }
+        ]
+      }
     ],
-    "PostCompact":  [{ "matcher": "",        "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/read-once/compact.sh" }] }],
+    "PostCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/read-once/compact.sh" }
+        ]
+      }
+    ],
     "SessionStart": [
-      { "matcher": "",        "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/session-scratch/hook.sh" }] },
-      { "matcher": "compact", "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/read-once/compact.sh" }] }
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/session-scratch/hook.sh", "statusMessage": "Preparing per-session scratch" }
+        ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/read-once/compact.sh" }
+        ]
+      }
     ],
-    "SessionEnd":   [{ "matcher": "",        "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/session-scratch/hook.sh" }] }]
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/session-scratch/hook.sh" }
+        ]
+      }
+    ]
   }
 }
 ```
 
-## Project-local config
+What each matcher block does:
 
-Several hooks load layered configuration: shipped defaults, then
-`$HOME/.claude/.<hook-name>`, then `$CLAUDE_PROJECT_DIR/.<hook-name>`. Put
-project-specific entries at the project root, not in the shipped defaults:
+| Event             | Matcher    | Hooks (left-to-right)                                | Purpose                                                                |
+|-------------------|------------|------------------------------------------------------|------------------------------------------------------------------------|
+| `PreToolUse`      | `""`       | path-guard                                           | Zone + per-file write protection on every tool call.                   |
+| `PreToolUse`      | `Read`     | read-once                                            | Suppress redundant re-reads of unchanged files.                        |
+| `PreToolUse`      | `Bash`     | bash-guard → always-allow → read-guard               | Block dangerous shell, auto-approve known commands, steer file reads.  |
+| `PostCompact`     | `""`       | read-once/compact.sh                                 | Clear the read cache after context compaction.                         |
+| `SessionStart`    | `""`       | session-scratch                                      | mkdir + export `$CLAUDE_SESSION_SCRATCH`; sweep 7-day-stale entries.    |
+| `SessionStart`    | `compact`  | read-once/compact.sh                                 | Belt-and-suspenders cache clear if `PostCompact` didn't fire.          |
+| `SessionEnd`      | `""`       | session-scratch                                      | Remove this session's scratch dir.                                     |
 
-| Hook        | Project-root file | Purpose                                                              |
-|-------------|-------------------|----------------------------------------------------------------------|
-| always-allow| `.always-allow`   | ERE patterns auto-approved for Bash (e.g. project build scripts).    |
-| path-guard  | `.path-guard`     | `[secret]` / `[protected]` rules in addition to shipped defaults.    |
-| read-guard  | `.read-guard`     | Path prefixes exempt from the "use Read tool" guard.                 |
+Order within a single matcher matters: hooks run left-to-right and any hook
+that exits 2 short-circuits the rest of the chain.
 
-The shipped `default.<hook-name>` files inside `hooks/<name>/` are kept free of
-project-specific entries.
+## Per-session scratch
+
+The `session-scratch` hook gives every Claude Code session its own scratch
+subdirectory and exposes it through two environment variables:
+
+| Variable                   | Set by                             | Value                                                       |
+|----------------------------|------------------------------------|-------------------------------------------------------------|
+| `CLAUDE_SCRATCH_ROOT`      | `.claude/settings.json` `env`      | Project-relative directory name. Default: `.scratch`.       |
+| `CLAUDE_SESSION_SCRATCH`   | `session-scratch` SessionStart     | `$CLAUDE_PROJECT_DIR/$CLAUDE_SCRATCH_ROOT/$session_id`.     |
+
+The full directory is `<project>/<scratch-root>/<session_id>/`. Concurrent
+sessions each get their own subdirectory so writes never collide.
+
+Lifecycle:
+
+- **SessionStart** — `mkdir -p` the per-session dir; export both variables via
+  the harness env file; sweep entries older than 7 days at the top level of
+  `$CLAUDE_SCRATCH_ROOT/` (covers crashed sessions that never reached
+  SessionEnd).
+- **SessionEnd** — `rm -rf` the per-session dir.
+
+Use `$CLAUDE_SESSION_SCRATCH` (not `$CLAUDE_SCRATCH_ROOT`) for all
+within-session scratch writes — curl-to-file dumps, commit-message files for
+`git commit -F`, generated `.new` files when path-guard blocks a write, etc.
+The variable is exported only inside Claude's own bash subprocess; if you
+need a path to hand to the user for them to run in their own shell, write
+it repo-relative (e.g. `.scratch/<session_id>/foo.new`).
+
+`CLAUDE_SCRATCH_ROOT` is read with a fallback of `.scratch`, so the hook
+suite works even before you've configured the `env` block; setting it in
+`settings.json` only matters if you want the directory name to differ.
+
+Other hooks that respect `CLAUDE_SCRATCH_ROOT`:
+
+- **read-once** stores its per-session cache at
+  `$CLAUDE_SCRATCH_ROOT/$session_id/read-once/` so the cache is reclaimed
+  automatically when the session ends.
+- **path-guard**'s "write to scratch and ask the user to `mv`" workflow points
+  at `$CLAUDE_SESSION_SCRATCH/<basename>.new`.
+
+## Configuration
+
+Each hook (other than session-scratch) loads layered configuration: shipped
+defaults, then user-wide overrides under `$HOME/.claude/.<hook>`, then
+project-local overrides under `$CLAUDE_PROJECT_DIR/.<hook>`. All three files
+concatenate, so layered files **add to** the rule set — there is no `!`
+negation. To drop a default rule, comment it out in the shipped file.
+
+| Hook           | Project-root file | Purpose                                                              |
+|----------------|-------------------|----------------------------------------------------------------------|
+| `always-allow` | `.always-allow`   | ERE patterns auto-approved for Bash (e.g. project build scripts).    |
+| `path-guard`   | `.path-guard`     | `[secret]` / `[protected]` rules in addition to shipped defaults.    |
+| `read-guard`   | `.read-guard`     | Path prefixes exempt from the "use Read tool" guard.                 |
+
+### path-guard
+
+`.path-guard` files have up to two sections — `[secret]` (block both Read and
+Write) and `[protected]` (block Write only). Patterns use a gitignore-flavoured
+glob:
+
+| Token         | Meaning                                                            |
+|---------------|--------------------------------------------------------------------|
+| `*`           | Any characters within a path segment (no `/`).                     |
+| `**`          | Any number of path segments.                                       |
+| `?`           | One character (no `/`).                                            |
+| `[abc]`       | Character class.                                                   |
+| `~`           | Leading tilde expands to `$HOME`.                                  |
+| `/foo/bar`    | Leading `/` anchors to filesystem root.                            |
+| `foo/bar`     | No leading `/` matches as basename or path-suffix.                 |
+| `dir/**`      | Also matches the directory itself, not just its contents.          |
+
+Example project `.path-guard`:
+
+```ini
+[secret]
+
+# Block both Read and Write on credential files anywhere in the project.
+**/secrets/*.toml
+**/*.credentials.json
+
+[protected]
+
+# Block Write only — files can still be inspected with the Read tool.
+deployment/k8s/production/**
+migrations/**
+schema.sql
+
+# The shipped pattern matches .claude/hooks/**/hook.sh, but path-guard
+# resolves through symlinks via realpath -m. install.sh writes these
+# mirrors so the realpath of a symlinked hook stays write-blocked.
+git_modules/claude-tools/hooks/**/hook.sh
+git_modules/claude-tools/hooks/**/compact.sh
+```
+
+Example user-wide `~/.claude/.path-guard`:
+
+```ini
+[secret]
+
+# Personal credential stores not covered by the shipped defaults.
+~/.config/op/**
+~/.config/rclone/rclone.conf
+~/Vault/**
+
+[protected]
+
+# Personal dotfiles you never want an agent to edit accidentally.
+~/.bashrc
+~/.zshrc
+~/.gitconfig
+```
+
+The shipped `hooks/path-guard/default.path-guard` documents the full pattern
+syntax inline and ships sensible defaults for SSH keys, AWS/GCP/Azure
+credentials, `/etc/shadow`, certificate/key extensions, `.env*`, and so on —
+override at the user or project layer rather than editing the default file in
+the submodule.
+
+### always-allow
+
+`.always-allow` files are flat lists of POSIX ERE patterns. A Bash command is
+auto-approved if it matches any entry. Multi-command lines (`&&`, `||`, `;`,
+`|`, newlines) and background commands are never auto-approved.
+
+Example project `.always-allow`:
+
+```regex
+# Project build scripts that this agent runs frequently.
+^(bash )?scripts/build[[:alnum:]_-]*\.sh
+^(bash )?scripts/run\.sh
+^npm run (test|lint|typecheck)$
+```
+
+### read-guard
+
+`.read-guard` files list directory prefixes where the "use Read tool" guard
+does not apply. Include the trailing `/`. read-guard additionally auto-exempts
+`$CLAUDE_SCRATCH_ROOT/` (default `.scratch/`) so diagnostic dumps under the
+session scratch dir can always be inspected with shell tools.
+
+```
+build/output/
+docs/dumps/
+```
 
 ## Updating
 
@@ -136,6 +321,16 @@ git commit -m "claude-tools: bump submodule"
 ```
 
 Re-run `install.sh` after a pull if a new hook has been added upstream.
+
+## Credits
+
+- **read-once** and **bash-guard** are forked from / inspired by
+  [Bande-a-Bonnot/Boucle-framework](https://github.com/Bande-a-Bonnot/Boucle-framework).
+  The versions here are adapted for project-local conventions (per-session
+  scratch storage, deterministic invalidation, subagent isolation) — see
+  `hooks/read-once/README.md` for the specific divergences.
+- **path-guard**, **read-guard**, **always-allow**, and **session-scratch** are
+  original to claude-tools.
 
 ## License
 
