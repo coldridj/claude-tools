@@ -170,3 +170,21 @@ intercepts re-reads when the file hasn't changed (same mtime) and the
 cache is current. Changed files always pass through. With diff mode
 enabled (`READ_ONCE_DIFF=1`), changed files show just the delta instead
 of the full content.
+
+## CLAUDE.md suggestions
+
+read-once works without any CLAUDE.md guidance — the advisory message
+is self-explanatory. The one place CLAUDE.md helps is reinforcing that
+the advisory is genuine and the file content is already in context:
+
+````markdown
+**Trust the read-once advisory.** When `read-once` returns an advisory
+(`already in context (read Xm ago, unchanged)`), do not re-read the
+file. The content is still in the context window from the first read;
+refer to it directly rather than asking for a fresh copy.
+````
+
+If you find the advisory is being ignored on long sessions, the cache
+may have outlived the actual context. Tighten with `READ_ONCE_TTL=600`
+(10 min) or `READ_ONCE_TTL=300` (5 min) as a failsafe in addition to
+the `PostCompact` clear.

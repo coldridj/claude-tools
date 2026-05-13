@@ -140,3 +140,25 @@ bash test.sh
 `test-jailbreak.sh` (chained from `test.sh`) holds 38 additional
 adversarial probes from the most recent hardening pass — see
 [`HARDENING.md`](HARDENING.md) for the bypass classes covered.
+
+## CLAUDE.md suggestions
+
+Copy the following into your project's CLAUDE.md so the agent treats a
+bash-guard block as a hard stop rather than a puzzle to route around.
+
+````markdown
+**Blocked bash commands: stop and ask, do not work around.** When
+`bash-guard` blocks a command (the hook prints `bash-guard: <reason>`
+and the suggestion line), do not retry with an equivalent alternative
+(`shred` for `rm`, `nc` for `curl`, `bash <<<` for `bash -c`, base64-
+decode-to-shell, etc.). The hook's hardening pass covers the common
+workarounds; chasing them just produces a longer block trail. Either
+add the relevant `allow:` to `.bash-guard` after confirming the
+operation is safe in this project, or ask the user to run the command
+themselves.
+````
+
+For project-wide allow lists, edit `$CLAUDE_PROJECT_DIR/.bash-guard`
+rather than CLAUDE.md — the hook reads that file directly and applies
+the entries before any pattern check. The CLAUDE.md rule above is only
+for the runtime behaviour when a block fires.

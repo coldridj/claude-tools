@@ -2,9 +2,43 @@
 
 Per-session scratch directories for Claude Code.
 
-Without this hook, all Claude Code sessions running in the same project
-share `scratch/`. Concurrent sessions race on identical filenames (e.g.
-both write `scratch/out.json` while inspecting different URLs).
+## Motivation
+
+session-scratch exists for two reasons that compound:
+
+**1. Concurrent sessions on the same repository clone.** Multiple Claude
+Code sessions can run against the same project directory at once — one
+in a terminal, another in a separate IDE window, a third spawned via
+`claude --resume` to revisit a prior conversation, plus any subagents
+each of those spawns. Without per-session scratch they all share a
+single `scratch/` directory and collide:
+
+- Both write `scratch/out.json` while inspecting different URLs and
+  clobber each other's diagnostic dumps.
+- Both write `scratch/commit-msg.txt` and one session's commit message
+  overwrites the other's.
+- Per-tool cache files (notably `read-once`'s) mix readings from
+  independent context windows.
+
+Per-session subdirectories under
+`$CLAUDE_SCRATCH_ROOT/<session_id>/`, exposed as
+`$CLAUDE_SESSION_SCRATCH` to every Bash tool call, keep each session's
+state independent.
+
+**2. Anchoring `read-once` via `read-guard`.** `read-once` only sees
+the Read tool — shell-based file reads (`cat`, `grep`, `sed`, `awk`,
+…) bypass it entirely. `read-guard` exists to close that gap: it
+blocks the shell forms and forces the agent through the Read tool,
+where `read-once` can then track every read and de-duplicate the
+re-reads. The two hooks only deliver on that promise when `read-once`
+has somewhere to keep its per-session cache:
+`$CLAUDE_PROJECT_DIR/$CLAUDE_SCRATCH_ROOT/<session_id>/read-once/<agent>.jsonl`.
+session-scratch creates that directory on `SessionStart`, exports the
+variables that point at it, and removes it on `SessionEnd`. Without
+session-scratch, `read-once`'s cache would either be shared across
+sessions (false hits) or have to invent its own ad-hoc lifecycle. With
+it, the three hooks compose into a single coherent "what is already in
+this session's context window" model that survives concurrent use.
 
 ## How it works
 
@@ -46,3 +80,43 @@ Example:
 ```sh
 curl -s "$URL" > "$CLAUDE_SESSION_SCRATCH/out.json"
 ```
+
+## CLAUDE.md suggestions
+
+Copy the following into your project's CLAUDE.md so agents use the
+per-session scratch directory consistently. The patterns assume the
+`session-scratch` hook is registered on SessionStart and SessionEnd.
+
+````markdown
+**Per-session scratch.** Each session gets its own scratch subdirectory at
+`$CLAUDE_SCRATCH_ROOT/<session_id>/`, exported as `$CLAUDE_SESSION_SCRATCH`
+by the `session-scratch` hook. `CLAUDE_SCRATCH_ROOT` is set in
+`.claude/settings.json` (default: `.scratch`). Always write scratch files
+under `$CLAUDE_SESSION_SCRATCH/`, never directly under the scratch root —
+concurrent sessions would otherwise race on identical filenames. The
+per-session directory is removed on SessionEnd; entries older than 7 days
+at the top level of `$CLAUDE_SCRATCH_ROOT/` are swept on SessionStart.
+
+**Repo-relative paths.** Never write to `/tmp`. All scratch files, output
+dirs, and test artefacts go inside the repo tree — scratch files
+specifically go under `$CLAUDE_SESSION_SCRATCH/`.
+
+**curl to file then Read.** Never pipe curl output to the terminal or to
+another command. Always redirect to a scratch file under
+`$CLAUDE_SESSION_SCRATCH/` and then use the Read tool to inspect the
+result. Pattern: `curl -s <url> > "$CLAUDE_SESSION_SCRATCH/out.json"`
+then Read `$CLAUDE_SESSION_SCRATCH/out.json`.
+
+**Commit messages go in a per-session scratch file.** Always write the
+commit message to `$CLAUDE_SESSION_SCRATCH/commit-msg.txt` and run
+`git commit -F "$CLAUDE_SESSION_SCRATCH/commit-msg.txt"`. Inline
+`-m "..."` or HEREDOC bodies risk being read by `path-guard`'s backstop
+as the command itself when the message describes destructive operations
+or protected paths.
+
+**Hand-off to the user's own shell.** `$CLAUDE_SESSION_SCRATCH` is only
+exported inside Claude's bash subprocess; a fresh terminal does not have
+it. When emitting a `mv` / `cat` / etc. for the user to run, expand the
+variable to the repo-relative form (e.g. `.scratch/<session_id>/foo.new`)
+so the command is copy-pasteable in any shell.
+````

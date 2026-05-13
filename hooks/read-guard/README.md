@@ -67,3 +67,28 @@ tools.
 ```sh
 bash test.sh
 ```
+
+## CLAUDE.md suggestions
+
+Copy the following into your project's CLAUDE.md so the agent reaches
+for the Read tool by default. Without an explicit instruction the agent
+often falls back to `cat` / `head` / `grep` for reading, which
+read-guard then has to bounce on every attempt.
+
+````markdown
+**Read files.** Always use the Read tool instead of using a bash command
+to read files. Always use the Read tool instead of `cat`, `head`,
+`tail`, `sed`, `awk`, `grep`, `cut` etc. — `read-guard` enforces this
+and will block the command.
+
+**curl to file then Read.** Never pipe curl output to the terminal or
+to another command. Always redirect to a scratch file under
+`$CLAUDE_SESSION_SCRATCH/` and then use the Read tool to inspect the
+result. Pattern: `curl -s <url> > "$CLAUDE_SESSION_SCRATCH/out.json"`
+then Read `$CLAUDE_SESSION_SCRATCH/out.json`.
+````
+
+If your project has output dirs (e.g. `build/output/`) that the agent
+needs to inspect with shell tools, list them in
+`$CLAUDE_PROJECT_DIR/.read-guard` rather than in CLAUDE.md — the guard
+will then pass those paths through automatically.

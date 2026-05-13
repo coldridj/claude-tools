@@ -58,3 +58,20 @@ Example project `.always-allow`:
 ```sh
 bash test.sh
 ```
+
+## CLAUDE.md suggestions
+
+always-allow needs no runtime guidance — it operates silently. The one
+project-level convention worth recording is *which* operations are
+considered safe enough to add to `.always-allow` in the first place:
+
+````markdown
+**Auto-allowed commands live in `.always-allow`.** Project commands the
+agent runs frequently (build scripts, `npm test`, `pytest`, etc.) belong
+in `$CLAUDE_PROJECT_DIR/.always-allow` so the permission prompt does not
+fire on every invocation. Anything destructive, anything that touches
+secrets, and anything that spawns multiple statements must stay out of
+this file — the `always-allow` hook itself never auto-allows commands
+containing `&&`, `||`, `;`, `|`, newlines, or `run_in_background`, but a
+loose entry in `.always-allow` still grants single-statement variants.
+````

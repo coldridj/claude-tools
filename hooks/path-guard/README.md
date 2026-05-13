@@ -101,3 +101,44 @@ chained from the regular test suite.
 ```sh
 bash test.sh   # runs unit tests + the jailbreak probes
 ```
+
+## CLAUDE.md suggestions
+
+Copy the following into your project's CLAUDE.md so an agent knows how
+to react when path-guard blocks a write. Without this rule the agent
+typically retries with workarounds (escaping, alternate paths, etc.) —
+which is exactly the failure mode path-guard's bash-backstop is built to
+defeat, but it wastes a turn each time.
+
+````markdown
+**Write-blocked files: scratch + prompt.** When `path-guard` blocks a
+write (the hook prints `path-guard: writing "..." is not allowed`), do
+not retry or attempt to bypass. Instead:
+
+1. Write the intended new content to `$CLAUDE_SESSION_SCRATCH/<basename>.new`
+   (or another descriptive scratch path under `$CLAUDE_SESSION_SCRATCH/`).
+2. Show the diff against the original.
+3. Prompt the user to move the file with a
+   `mv <repo-relative-scratch-path>/<basename>.new <target>` command they
+   can run from the repo root. **Always use the repo-relative scratch
+   path (e.g. `.scratch/<session_id>/<basename>.new`), not
+   `$CLAUDE_SESSION_SCRATCH`** — that variable is only exported inside
+   Claude's bash subprocess; a fresh terminal does not have it.
+
+This applies to both single-file edits (CLAUDE.md, `.claude/settings.json`,
+hook scripts) and shell-driven writes that the backstop refuses. Never
+try to defeat the protection — its job is to make these edits a
+human-in-the-loop step.
+````
+
+If your project also commits with `path-guard` active, pair the rule
+above with this one — the backstop will otherwise read the commit
+message as the command and block the commit itself:
+
+````markdown
+**Commit messages go in a per-session scratch file.** Always write the
+commit message to `$CLAUDE_SESSION_SCRATCH/commit-msg.txt` and run
+`git commit -F "$CLAUDE_SESSION_SCRATCH/commit-msg.txt"`. Inline
+`-m "..."` or HEREDOC bodies are blocked by the backstop when the
+message describes destructive commands or protected paths.
+````
