@@ -19,6 +19,22 @@ record of what was resolved.
 
 ## 2026-05-14
 
+### Fixed
+
+- **`hooks/path-guard/hook.sh`: Bash-backstop substring false positives.**
+  `build_path_regex` and `build_dir_prefix_regex` now wrap each pattern's
+  command-text regex with `(^|[^A-Za-z0-9._-])…([^A-Za-z0-9._-]|$)` so
+  basename rules don't match as substrings of unrelated paths. Previously
+  the default `.git` / `.git/**` rules matched the `.git` suffix of
+  `origin.git` (and any other bare-repo or `*.git` directory), so a
+  command like `rm -rf /tmp/x && git init --bare /tmp/x/origin.git`
+  triggered the tree-walking backstop with no real protected dir
+  involved. Same root cause for `.claude` matching `.claude-backup` /
+  `myclaude/...`. Eight regression probes added to `hooks/path-guard/test.sh`
+  cover both directions (allow legitimate look-alikes; still block real
+  `.git` / `.claude` paths). The remaining direction-blindness in
+  `cp` / `install` / `ln` source-vs-destination is logged in `BUGS.md`.
+
 ### Added
 
 - **`scripts/test-push-github-mirror.sh`** — first test suite for the

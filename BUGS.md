@@ -31,6 +31,18 @@ grouped by hook, then by severity (highest first).
 
 ## path-guard
 
+- [ ] **`cp` / `install` / `ln` source-vs-destination direction-blindness.**
+  The Bash backstop (`WRITE_CMDS_RE[^|&;]*PROTECTED_RE`) treats any
+  protected-path mention near a write command as a write *to* it, but
+  `cp src dst`, `install src dst`, and `ln src dst` only write to `dst`
+  — `src` is read. A command of the form
+  `cp <protected-path> /tmp/scratch.sh` is therefore blocked even though
+  it is a read of `<protected-path>`, not a write. Repro:
+  `cp git_modules/claude-tools/scripts/push-github-mirror.sh /tmp/x`.
+  Targeted fix is non-trivial: would need to peel `cp`/`install`/`ln`
+  out of `WRITE_CMDS_RE` and parse their args to identify the final
+  positional (the destination). Workarounds for now: rename the
+  destination to a non-protected basename, or use `Read` + `Write`.
 - [ ] **Layered config files are not exercised.** Tests load only
   `default.path-guard`. The user-wide `~/.claude/.path-guard` and the
   project-local `$CLAUDE_PROJECT_DIR/.path-guard` are documented as

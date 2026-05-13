@@ -44,12 +44,18 @@
 #   - Tree-walking commands (find -delete/-exec, tar -x, unzip, rsync, rm -r)
 #     are additionally matched against the directory-prefix of any protected
 #     or secret pattern.
+#   - Each pattern's command-text regex is word-bounded on both sides so
+#     basename patterns like `.git` don't match inside `origin.git`,
+#     `.claude` doesn't match inside `myclaude/...`, etc.
 #
 # Known limitations (covered by bash-guard or out-of-scope):
 #   - $VAR / $(cmd) redirect targets cannot be analysed statically.
 #   - Relative redirect/tee targets above the project root (../../etc/x) are not
 #     captured for zone enforcement; only absolute, ~, and quoted forms are.
 #   - Indirect execution (base64 | sh) is bash-guard's domain.
+#   - `cp src dst` / `install src dst` / `ln src dst` cannot distinguish read
+#     source from write destination; a protected source still triggers the
+#     backstop. See BUGS.md (path-guard, cp/install/ln direction-blindness).
 
 set -euo pipefail
 
@@ -263,12 +269,19 @@ glob_to_command_regex() {
   printf '%s' "$out"
 }
 
+# Word-boundary chars that bookend a path mention in command text. Excludes
+# alnum, dot, underscore, hyphen — so `.git` won't match inside `origin.git`,
+# `.claude` won't match `myclaude` or `.claude-backup`, etc. Allowed: `/`,
+# whitespace, quotes, redirect/shell operators.
+BOUNDARY_CHAR='[^A-Za-z0-9._-]'
+
 build_path_regex() {
-  local joined="" pat re
+  local joined="" pat re wrapped
   for pat in "$@"; do
     re=$(glob_to_command_regex "$pat")
     [ -z "$re" ] && continue
-    if [ -z "$joined" ]; then joined="$re"; else joined="${joined}|${re}"; fi
+    wrapped="(^|${BOUNDARY_CHAR})(${re})(${BOUNDARY_CHAR}|\$)"
+    if [ -z "$joined" ]; then joined="$wrapped"; else joined="${joined}|${wrapped}"; fi
   done
   [ -z "$joined" ] && return 0
   printf '(%s)' "$joined"
@@ -304,7 +317,7 @@ pattern_dir_prefix() {
 }
 
 build_dir_prefix_regex() {
-  local joined="" pat prefix re seen=" "
+  local joined="" pat prefix re seen=" " wrapped
   for pat in "$@"; do
     prefix=$(pattern_dir_prefix "$pat")
     [ -z "$prefix" ] && continue
@@ -312,10 +325,8 @@ build_dir_prefix_regex() {
     seen+="$prefix "
     re=$(glob_to_command_regex "$prefix")
     [ -z "$re" ] && continue
-    # Append a boundary so `.claude` doesn't match `.claude-backup`.
-    # Boundary = end-of-line or any non-{word,dot,dash} char (slash/space/quote).
-    if [ -z "$joined" ]; then joined="(${re})([^A-Za-z0-9._-]|\$)"
-    else joined="${joined}|(${re})([^A-Za-z0-9._-]|\$)"; fi
+    wrapped="(^|${BOUNDARY_CHAR})(${re})(${BOUNDARY_CHAR}|\$)"
+    if [ -z "$joined" ]; then joined="$wrapped"; else joined="${joined}|${wrapped}"; fi
   done
   [ -z "$joined" ] && return 0
   printf '(%s)' "$joined"

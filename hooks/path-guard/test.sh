@@ -307,6 +307,38 @@ expect_allow "Read .claude/settings.json" '{"tool_name":"Read","tool_input":{"fi
 expect_allow "Read CLAUDE.md"             '{"tool_name":"Read","tool_input":{"file_path":"/test/project/CLAUDE.md"}}'
 expect_allow "Read hook.sh"               '{"tool_name":"Read","tool_input":{"file_path":"/test/project/.claude/hooks/path-guard/hook.sh"}}'
 
+echo "=== Bash backstop word-boundary regressions ==="
+# The default rules `.git` and `.git/**` once matched as substrings, so any
+# command containing `*.git` (typical bare-repo naming) plus a write op was
+# falsely blocked. Same for `.claude` matching inside `.claude-backup`,
+# `myclaude/...`, etc. The boundary wrap in build_path_regex /
+# build_dir_prefix_regex requires the pattern to be flanked by non-word chars.
+
+expect_allow "rm + bare-repo init (origin.git is not .git)" \
+  '{"tool_name":"Bash","tool_input":{"command":"rm -rf /var/tmp/sb && mkdir -p /var/tmp/sb && git init --bare /var/tmp/sb/origin.git"}}'
+
+expect_allow "cp into foo.git" \
+  '{"tool_name":"Bash","tool_input":{"command":"cp /var/tmp/src.json /var/tmp/foo.git"}}'
+
+expect_allow "rm -rf path/origin.git" \
+  '{"tool_name":"Bash","tool_input":{"command":"rm -rf /var/tmp/sandbox/origin.git"}}'
+
+expect_allow ".claude-backup is not .claude" \
+  '{"tool_name":"Bash","tool_input":{"command":"rm -rf /tmp/.claude-backup/file"}}'
+
+expect_allow "myclaude/ prefix is not .claude" \
+  '{"tool_name":"Bash","tool_input":{"command":"rm -rf /tmp/myclaude/file"}}'
+
+# And the legitimate matches must still block.
+expect_block "rm -rf /test/project/.git (legit)" \
+  '{"tool_name":"Bash","tool_input":{"command":"rm -rf /test/project/.git"}}'
+
+expect_block "rm -rf .git/objects (legit, dir-prefix tree match)" \
+  '{"tool_name":"Bash","tool_input":{"command":"rm -rf /test/project/sub/.git/objects"}}'
+
+expect_block "find -delete inside .claude (legit, tree)" \
+  '{"tool_name":"Bash","tool_input":{"command":"find /test/project/.claude -name '\''*.json'\'' -delete"}}'
+
 echo ""
 if [ "$FAILURES" -ne 0 ]; then
   echo "$FAILURES test.sh case(s) failed." >&2
