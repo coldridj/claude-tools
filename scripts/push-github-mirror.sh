@@ -13,6 +13,15 @@
 
 set -euo pipefail
 
+# When invoked from a git hook (e.g. pre-push), the parent git process
+# exports GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE pointing at the main
+# repo. Subsequent git invocations inherit these and *ignore* cwd —
+# meaning `git checkout --orphan` run inside a temp worktree would still
+# operate on the main worktree, stranding the user on the mirror branch.
+# Unset the inherited env so all git commands here resolve gitdir/worktree
+# from cwd instead.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+
 MIRROR_BRANCH="github-mirror"
 REMOTE="origin"
 
@@ -55,12 +64,12 @@ else
   SOURCE_SHA="$(git rev-parse --verify "$SOURCE_SHA^{commit}")"
 fi
 
-# Temp worktree lives OUTSIDE the gitdir. An earlier version of this script
-# placed it at $GIT_DIR/mirror-worktree, which confused git's worktree
-# resolution: `git checkout --orphan` run from inside that path ended up
-# updating the main worktree's HEAD instead of the linked worktree's,
-# leaving the user's checkout stranded on github-mirror.
-WORKTREE="$(mktemp -d "${TMPDIR:-/tmp}/claude-tools-mirror.XXXXXX")"
+# Temp worktree lives outside the gitdir. Combined with the env-var unset
+# above, this gives the subshell a clean worktree context for the
+# orphan-branch dance.
+TMP_BASE="${TMPDIR-}"
+[ -z "$TMP_BASE" ] && TMP_BASE=/tmp
+WORKTREE="$(mktemp -d "$TMP_BASE/claude-tools-mirror.XXXXXX")"
 
 cleanup() {
   if [ -d "$WORKTREE" ]; then
