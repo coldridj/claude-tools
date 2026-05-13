@@ -99,3 +99,32 @@ CLAUDE.md
 # === Hook scripts — the actual guard executables, not tests or docs ===
 .claude/hooks/**/hook.sh
 .claude/hooks/**/compact.sh
+
+# === Git internals — config, refs, packed objects, hooks ===
+# .git is the directory at the repo root for ordinary clones and the file
+# pointing into .git/modules/<sub>/ for submodules; the real submodule gitdir
+# lives at the superproject's .git/modules/<sub>/. Matching .git as a path
+# segment catches every form. Reads are still allowed (this section is
+# [protected], not [secret]) so `git log` / `git rev-parse` style inspection
+# of internals still works.
+.git
+.git/**
+
+# === claude-tools realpaths (symlinked-submodule defense in depth) ===
+# .claude/hooks/<name>/{hook,compact}.sh is typically a symlink into the
+# claude-tools submodule's hooks/<name>/. path-guard normalises through
+# symlinks via realpath, so the .claude/hooks/**/{hook,compact}.sh patterns
+# above no longer match the resolved path. These rules catch the resolved
+# form (assuming the submodule lives at a path containing the directory
+# name "claude-tools"). install.sh also writes a project-local .path-guard
+# with the exact submodule-relative path so this works when claude-tools is
+# vendored at a non-canonical location.
+claude-tools/hooks/**/hook.sh
+claude-tools/hooks/**/compact.sh
+
+# === claude-tools scripts/ — git-hook sources, installer, mirror script ===
+# Modifying any of these is arbitrary-code-on-next-push or
+# arbitrary-code-on-next-install. claude-tools/scripts/git-hooks/<hook> is
+# the symlink target of <gitdir>/hooks/<hook>; the .git/** rule above
+# blocks the symlink path, this rule blocks the realpath.
+claude-tools/scripts/**

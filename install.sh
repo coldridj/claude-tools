@@ -142,20 +142,27 @@ prompt() {
 }
 
 # ensure_path_guard_config: write or extend $SUPER/.path-guard so it covers
-# the submodule's realpath-resolved hook directories. Idempotent — if the
-# patterns are already present (anywhere in the file), do nothing.
+# the submodule's realpath-resolved hook directories and scripts/ tree.
+# Idempotent — if the patterns are already present (anywhere in the file),
+# do nothing.
+#
+# default.path-guard ships defaults that match the canonical name
+# "claude-tools"; these project-level mirrors keep protection working when
+# the submodule is vendored at a non-canonical path (e.g. vendor/foo).
 ensure_path_guard_config() {
   local cfg="$SUPER/.path-guard"
   local hook_pat="${SUBMODULE_REL}/hooks/**/hook.sh"
   local compact_pat="${SUBMODULE_REL}/hooks/**/compact.sh"
+  local scripts_pat="${SUBMODULE_REL}/scripts/**"
 
-  local need_hook=1 need_compact=1
+  local need_hook=1 need_compact=1 need_scripts=1
   if [ -f "$cfg" ]; then
     grep -qFx -- "$hook_pat"    "$cfg" 2>/dev/null && need_hook=0
     grep -qFx -- "$compact_pat" "$cfg" 2>/dev/null && need_compact=0
+    grep -qFx -- "$scripts_pat" "$cfg" 2>/dev/null && need_scripts=0
   fi
-  if [ "$need_hook" -eq 0 ] && [ "$need_compact" -eq 0 ]; then
-    printf '    .path-guard already protects %s/hooks (no change)\n' "$SUBMODULE_REL"
+  if [ "$need_hook" -eq 0 ] && [ "$need_compact" -eq 0 ] && [ "$need_scripts" -eq 0 ]; then
+    printf '    .path-guard already protects %s (no change)\n' "$SUBMODULE_REL"
     return 0
   fi
 
@@ -182,9 +189,12 @@ ensure_path_guard_config() {
 [protected]
 
 # Managed by claude-tools install.sh: protect the realpath-resolved hook
-# scripts so a symlinked .claude/hooks/<name>/hook.sh stays write-blocked.
+# scripts (so a symlinked .claude/hooks/<name>/hook.sh stays write-blocked)
+# and the submodule scripts/ tree (git-hook sources, installer, mirror) —
+# modifying any of those is arbitrary code on next push or install.
 $hook_pat
 $compact_pat
+$scripts_pat
 EOF
     printf '    wrote %s\n' "$cfg"
     return 0
@@ -197,9 +207,11 @@ EOF
   {
     printf '\n[protected]\n'
     printf '# Added by claude-tools install.sh: protect the realpath-resolved hook\n'
-    printf '# scripts so a symlinked .claude/hooks/<name>/hook.sh stays write-blocked.\n'
+    printf '# scripts (symlinked .claude/hooks/<name>/hook.sh) and the submodule\n'
+    printf '# scripts/ tree (git-hook sources, installer, mirror).\n'
     [ "$need_hook"    -eq 1 ] && printf '%s\n' "$hook_pat"
     [ "$need_compact" -eq 1 ] && printf '%s\n' "$compact_pat"
+    [ "$need_scripts" -eq 1 ] && printf '%s\n' "$scripts_pat"
   } >> "$cfg"
   printf '    appended submodule protection patterns to %s\n' "$cfg"
 }

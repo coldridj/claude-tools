@@ -126,6 +126,41 @@ hook.
   (NORM with `\`/`"`/`'` removed) are pre-computed once per Bash
   invocation and reused across every backstop check.
 
+## Pass 6 — submodule + symlink structure (2026-05-13)
+
+claude-tools is now vendored as a git submodule. `.claude/hooks/<name>/`
+became a symlink into `git_modules/claude-tools/hooks/<name>/`, and
+`<gitdir>/hooks/pre-push` is a symlink into
+`git_modules/claude-tools/scripts/git-hooks/pre-push`. The structural
+change opened three new attack surfaces, all unprotected against by the
+Pass 5 rule set. 17 new probes added; all now held.
+
+| # | Bypass class | Example | Defense |
+|---|---|---|---|
+| O | Writes to `.git/` internals | `echo evil > .git/config`, `cp /tmp/evil .git/hooks/post-commit`, `find .git -delete`, `rm -rf .git`, `echo evil > .git/modules/<sub>/hooks/pre-push` | Added `.git` + `.git/**` to default `[protected]`. Matches the directory at the repo root, the file form used by submodules, and the superproject's `.git/modules/<sub>/` tree (since `.git` appears as a path segment). Reads remain allowed (`[protected]`, not `[secret]`) so `git rev-parse` / `git log` style inspection still works. |
+| P | Writes to submodule realpath (hook scripts) | `cp /tmp/evil git_modules/claude-tools/hooks/path-guard/hook.sh` | path-guard's symlink resolution rewrites the target to the submodule realpath, which the shipped `.claude/hooks/**/hook.sh` rule no longer matches. Added `claude-tools/hooks/**/hook.sh` and `claude-tools/hooks/**/compact.sh` defaults (matching the realpath when the submodule lives at any path containing the canonical name). `install.sh` also writes `<submodule>/hooks/**/{hook,compact}.sh` to the project-local `.path-guard` so non-canonical installs are still covered. |
+| Q | Writes to submodule `scripts/` tree | `cp /tmp/evil git_modules/claude-tools/scripts/git-hooks/pre-push`, same for `scripts/install-hooks.sh` and `scripts/push-github-mirror.sh`; `rm -rf scripts/` | These files are: the source of `<gitdir>/hooks/pre-push` (modifying = arbitrary code on next `git push`), the hook installer (modifying = arbitrary code on next install), and the mirror publisher (modifying = arbitrary code or wrong content reaching the public mirror). Added `claude-tools/scripts/**` to default `[protected]`; `install.sh` also writes `<submodule>/scripts/**` to project-local `.path-guard`. |
+
+The symlink-path form — writing to `.claude/hooks/<name>/hook.sh` itself
+rather than the realpath — was already held by Pass 5: the existing
+`.claude/hooks/**/hook.sh` pattern feeds the bash backstop's literal-
+substring regex, which fires regardless of whether the path is a symlink.
+The new realpath/scripts rules are about the resolved targets, which the
+substring regex does not see when the command names the resolved path
+directly.
+
+**Test suite:** 93 probes total (76 prior + 17 new). New probes were
+confirmed to jailbreak the pre-pass hook (baseline run before adding the
+rules) and hold after.
+
+**Defense-in-depth rationale:** the default rules use the canonical
+directory name `claude-tools` so they hold even if a project never runs
+`install.sh`. `install.sh` separately writes the project-relative form
+of the same patterns into `<super>/.path-guard` so the protection still
+works when the submodule is vendored under a different name (e.g.
+`vendor/foo`). Either layer alone is sufficient; together they survive
+either being missing.
+
 ## Known limitations (deferred)
 
 These are documented inside `hook.sh` and probed-but-marked-allowed in
