@@ -15,8 +15,12 @@ TEST_DIR=$(mktemp -d)
 TEST_FILE="${TEST_DIR}/test-file.txt"
 echo "Hello, world!" > "$TEST_FILE"
 
-# Override cache dir for tests
+# Override HOME so $HOME/.claude/read-once stats live inside the test dir,
+# and CLAUDE_PROJECT_DIR so the per-session cache (which uses
+# $CLAUDE_PROJECT_DIR/$CLAUDE_SCRATCH_ROOT/<sid>/read-once) is also
+# isolated to the test dir instead of polluting the user's working tree.
 export HOME="$TEST_DIR"
+export CLAUDE_PROJECT_DIR="$TEST_DIR"
 mkdir -p "${TEST_DIR}/.claude/read-once"
 
 # Test session ID
@@ -69,7 +73,7 @@ assert_empty() {
 }
 
 make_input() {
-  local tool="$1" path="$2" session="${3:-$SESSION}" offset="${4:-}" limit="${5:-}"
+  local tool="$1" path="$2" session="${3:-$SESSION}" offset="${4:-}" limit="${5:-}" agent="${6:-}"
   local json="{\"tool_name\":\"${tool}\",\"tool_input\":{\"file_path\":\"${path}\""
   if [ -n "$offset" ]; then
     json="${json},\"offset\":${offset}"
@@ -77,7 +81,13 @@ make_input() {
   if [ -n "$limit" ]; then
     json="${json},\"limit\":${limit}"
   fi
-  json="${json}},\"session_id\":\"${session}\"}"
+  json="${json}},\"session_id\":\"${session}\""
+  if [ -n "$agent" ]; then
+    json="${json},\"agent_id\":\"${agent}\""
+  fi
+  # PreToolUse hook_event_name so the merged hook's dispatch case-statement
+  # routes this at the read-tracking path.
+  json="${json},\"hook_event_name\":\"PreToolUse\"}"
   echo "$json"
 }
 
@@ -118,6 +128,7 @@ OUTPUT=$(run_hook "$(make_input Read "$TEST_FILE")")
 assert_contains "Deny mode: blocks with decision:block" "block" "$OUTPUT"
 assert_contains "Deny mode: mentions already in context" "already in context" "$OUTPUT"
 # Verify robust response format (top-level decision, not hookSpecificOutput — see claude-code#37597)
+TOTAL=$((TOTAL + 1))
 if echo "$OUTPUT" | jq -e '.decision == "block"' >/dev/null 2>&1; then
   echo "PASS: Deny mode uses robust top-level decision format"
   PASS=$((PASS + 1))
@@ -199,42 +210,11 @@ else
   echo "  ✗ Stats file not found"
 fi
 
-# --- Test 10: TTL expiry (compaction safety) ---
-echo ""
-echo "10. TTL expiry allows re-read after timeout"
-
-# Create a fresh file and session for TTL test
-TTL_FILE="${TEST_DIR}/ttl-test.txt"
-echo "TTL test content" > "$TTL_FILE"
-TTL_SESSION="ttl-session-$$"
-
-# First read — should pass through
-OUTPUT=$(run_hook "$(make_input Read "$TTL_FILE" "$TTL_SESSION")")
-assert_empty "TTL: first read passes through" "$OUTPUT"
-
-# Second read — should be intercepted (warn mode: allow with advisory)
-OUTPUT=$(run_hook "$(make_input Read "$TTL_FILE" "$TTL_SESSION")")
-assert_contains "TTL: second read intercepted" "already in context" "$OUTPUT"
-assert_contains "TTL: message mentions re-read window" "Re-read allowed after" "$OUTPUT"
-
-# Now backdate the cache entry to simulate TTL expiry
-SESSION_HASH=$(echo -n "$TTL_SESSION" | { sha256sum 2>/dev/null || shasum -a 256; } | cut -c1-16)
-CACHE_FILE="${TEST_DIR}/.claude/read-once/session-${SESSION_HASH}.jsonl"
-# Replace timestamp with one that's older than TTL (default 1200s)
-if [ -f "$CACHE_FILE" ]; then
-  OLD_TS=$(($(date +%s) - 1500))
-  # Rewrite the cache file with old timestamp
-  sed -i.bak "s/\"ts\":[0-9]*/\"ts\":${OLD_TS}/g" "$CACHE_FILE"
-  rm -f "${CACHE_FILE}.bak"
-fi
-
-# Third read — should pass through (TTL expired)
-OUTPUT=$(run_hook "$(make_input Read "$TTL_FILE" "$TTL_SESSION")")
-assert_empty "TTL: read after expiry passes through" "$OUTPUT"
-
-# Verify expired event in stats
-EXPIRED_COUNT=$(grep -c '"event":"expired"' "$STATS" 2>/dev/null || true)
-assert_eq "TTL: expired event logged in stats" "1" "$([ "$EXPIRED_COUNT" -gt 0 ] && echo 1 || echo 0)"
+# Test 10 (TTL-with-default-1200s assertions) removed — the current hook
+# defaults to READ_ONCE_TTL=0 (deterministic-only) and emits "Cache cleared
+# on /compact, /clear, or resume" rather than the upstream "Re-read allowed
+# after Xm" wording. Custom-TTL coverage is in Test 11 below; the expired-
+# event stats assertion is folded in there.
 
 # --- Test 11: Custom TTL via environment variable ---
 echo ""
@@ -261,6 +241,10 @@ sleep 3
 # Re-read after TTL — should pass
 OUTPUT=$(run_hook "$(make_input Read "$CTL_FILE" "$CTL_SESSION")")
 assert_empty "Custom TTL: re-read passes after 2s TTL" "$OUTPUT"
+
+# Expired event should be logged in stats (rolled in from removed Test 10)
+EXPIRED_COUNT=$(grep -c '"event":"expired"' "$STATS" 2>/dev/null || true)
+assert_eq "Custom TTL: expired event logged in stats" "1" "$([ "$EXPIRED_COUNT" -gt 0 ] && echo 1 || echo 0)"
 
 # Reset TTL
 unset READ_ONCE_TTL
@@ -325,10 +309,10 @@ export READ_ONCE_DIFF=1
 OUTPUT=$(run_hook "$(make_input Read "$DIFF_FILE" "$DIFF_SESSION")")
 assert_empty "Diff: first read passes through" "$OUTPUT"
 
-# Verify snapshot was created
-SESSION_HASH_DIFF=$(echo -n "$DIFF_SESSION" | { sha256sum 2>/dev/null || shasum -a 256; } | cut -c1-16)
+# Verify snapshot was created. Current hook layout:
+#   <project>/<scratch-root>/<sid>/read-once/snapshots/<agent>-<path-hash>
 PATH_HASH_DIFF=$(echo -n "$DIFF_FILE" | { sha256sum 2>/dev/null || shasum -a 256; } | cut -c1-16)
-SNAP="${TEST_DIR}/.claude/read-once/snapshots/${SESSION_HASH_DIFF}-${PATH_HASH_DIFF}"
+SNAP="${TEST_DIR}/.scratch/${DIFF_SESSION}/read-once/snapshots/main-${PATH_HASH_DIFF}"
 assert_eq "Diff: snapshot file created" "1" "$([ -f "$SNAP" ] && echo 1 || echo 0)"
 
 # Modify file with a small change
@@ -434,140 +418,37 @@ assert_empty "Cost: first read passes" "$OUTPUT"
 OUTPUT=$(run_hook "$(make_input Read "$COST_FILE" "$COST_SESSION")")
 assert_contains "Cost: advisory includes Sonnet cost" "Sonnet" "$OUTPUT"
 
-# --- Group 20: Stats CLI cost estimates ---
+# Groups 20 and 21 (Stats CLI / Verify command) removed — they probed an
+# upstream `./read-once` wrapper with an `~/.claude/read-once/` install
+# layout. In claude-tools the wrapper lives at `read-once.sh` and the
+# hook is symlinked via the suite-level installer; the `verify` /
+# `install` subcommands no longer apply.
+
+# --- PostCompact / SessionStart(compact) dispatch ---
+# After the compact.sh → hook.sh merge, the same hook.sh handles both
+# PreToolUse and the cache-clear events. These tests exercise both the
+# PostCompact route and the SessionStart(matcher=compact) fallback by
+# feeding the merged hook each `hook_event_name` value.
+
 echo ""
-echo "--- Group 20: Stats CLI cost line ---"
+echo "--- PostCompact dispatch (merged into hook.sh) ---"
 
-# Stats should show cost line when tokens have been saved
-STATS_OUTPUT=$("${SCRIPT_DIR}/read-once" stats 2>&1)
-if echo "$STATS_OUTPUT" | grep -q "Est. cost saved"; then
-  echo "PASS: Stats shows cost estimate"
-  PASS=$((PASS + 1))
-elif echo "$STATS_OUTPUT" | grep -q "No read-once data"; then
-  echo "SKIP: No stats data in test env (expected)"
-  PASS=$((PASS + 1))
-else
-  echo "PASS: Stats ran without error"
-  PASS=$((PASS + 1))
-fi
-TOTAL=$((TOTAL + 1))
-
-# --- Group 21: Verify command ---
-echo ""
-echo "--- Group 21: Verify command ---"
-
-CLI="${SCRIPT_DIR}/read-once"
-
-# Set up a proper installed hook for verify to find
-mkdir -p "${TEST_DIR}/.claude/read-once"
-cp "$HOOK" "${TEST_DIR}/.claude/read-once/hook.sh"
-chmod +x "${TEST_DIR}/.claude/read-once/hook.sh"
-
-# Create settings.json with the hook configured
-cat > "${TEST_DIR}/.claude/settings.json" <<'EOJSON'
-{"hooks":{"PreToolUse":[{"matcher":"Read","hooks":[{"type":"command","command":"~/.claude/read-once/hook.sh"}]}]}}
-EOJSON
-
-VERIFY_OUTPUT=$(HOME="$TEST_DIR" "$CLI" verify 2>&1 || true)
-
-TOTAL=$((TOTAL + 1))
-if echo "$VERIFY_OUTPUT" | grep -q "read-once verify"; then
-  PASS=$((PASS + 1))
-  echo "  ✓ Verify: header present"
-else
-  FAIL=$((FAIL + 1))
-  echo "  ✗ Verify: header missing"
-fi
-
-TOTAL=$((TOTAL + 1))
-if echo "$VERIFY_OUTPUT" | grep -q "\[ok\].*jq found"; then
-  PASS=$((PASS + 1))
-  echo "  ✓ Verify: jq check passes"
-else
-  FAIL=$((FAIL + 1))
-  echo "  ✗ Verify: jq check missing"
-fi
-
-TOTAL=$((TOTAL + 1))
-if echo "$VERIFY_OUTPUT" | grep -q "\[ok\].*Hook file exists"; then
-  PASS=$((PASS + 1))
-  echo "  ✓ Verify: hook file detected"
-else
-  FAIL=$((FAIL + 1))
-  echo "  ✗ Verify: hook file not detected"
-fi
-
-TOTAL=$((TOTAL + 1))
-if echo "$VERIFY_OUTPUT" | grep -q "\[ok\].*settings.json is valid JSON"; then
-  PASS=$((PASS + 1))
-  echo "  ✓ Verify: settings.json validation"
-else
-  FAIL=$((FAIL + 1))
-  echo "  ✗ Verify: settings.json validation failed"
-fi
-
-TOTAL=$((TOTAL + 1))
-if echo "$VERIFY_OUTPUT" | grep -q "\[ok\].*First read"; then
-  PASS=$((PASS + 1))
-  echo "  ✓ Verify: dry-run first read"
-else
-  FAIL=$((FAIL + 1))
-  echo "  ✗ Verify: dry-run first read failed"
-fi
-
-TOTAL=$((TOTAL + 1))
-if echo "$VERIFY_OUTPUT" | grep -q "\[ok\].*Second read.*valid JSON"; then
-  PASS=$((PASS + 1))
-  echo "  ✓ Verify: dry-run second read"
-else
-  FAIL=$((FAIL + 1))
-  echo "  ✗ Verify: dry-run second read failed"
-fi
-
-TOTAL=$((TOTAL + 1))
-if echo "$VERIFY_OUTPUT" | grep -q "checks passed"; then
-  PASS=$((PASS + 1))
-  echo "  ✓ Verify: summary present"
-else
-  FAIL=$((FAIL + 1))
-  echo "  ✗ Verify: summary missing"
-fi
-
-# Test verify with missing settings (failure case)
-VERIFY_FAIL_OUTPUT=$(HOME="${TEST_DIR}/nonexistent" "$CLI" verify 2>&1 || true)
-
-TOTAL=$((TOTAL + 1))
-if echo "$VERIFY_FAIL_OUTPUT" | grep -q "\[FAIL\]"; then
-  PASS=$((PASS + 1))
-  echo "  ✓ Verify: detects missing installation"
-else
-  FAIL=$((FAIL + 1))
-  echo "  ✗ Verify: should detect missing installation"
-fi
-
-# --- PostCompact hook tests ---
-echo ""
-echo "--- PostCompact hook (compact.sh) ---"
-COMPACT_HOOK="${SCRIPT_DIR}/compact.sh"
-
-if [ -f "$COMPACT_HOOK" ]; then
-
-# Test: compact clears session cache
+# Test: PostCompact clears session cache
 echo "test-content-line-1" > "$TEST_FILE"
-RESULT=$(echo '{"tool_name":"Read","tool_input":{"file_path":"'"$TEST_FILE"'"},"session_id":"'"$SESSION"'"}' | "$HOOK")
+RESULT=$(run_hook "$(make_input Read "$TEST_FILE" "$SESSION")")
 assert_empty "compact: pre-seed first read" "$RESULT"
 
 # Second read should hit cache
 sleep 1
-RESULT=$(echo '{"tool_name":"Read","tool_input":{"file_path":"'"$TEST_FILE"'"},"session_id":"'"$SESSION"'"}' | "$HOOK")
+RESULT=$(run_hook "$(make_input Read "$TEST_FILE" "$SESSION")")
 assert_contains "compact: pre-seed cache hit" "already in context" "$RESULT"
 
-# Run PostCompact hook
-COMPACT_RESULT=$(echo '{"session_id":"'"$SESSION"'","hook_event_name":"PostCompact","trigger":"auto","compact_summary":"test summary"}' | "$COMPACT_HOOK")
+# Run PostCompact
+COMPACT_RESULT=$(echo '{"session_id":"'"$SESSION"'","hook_event_name":"PostCompact","trigger":"auto","compact_summary":"test summary"}' | bash "$HOOK")
 assert_empty "compact: hook exits cleanly" "$COMPACT_RESULT"
 
 # After compaction, re-read should be allowed (cache cleared)
-RESULT=$(echo '{"tool_name":"Read","tool_input":{"file_path":"'"$TEST_FILE"'"},"session_id":"'"$SESSION"'"}' | "$HOOK")
+RESULT=$(run_hook "$(make_input Read "$TEST_FILE" "$SESSION")")
 assert_empty "compact: re-read allowed after compaction" "$RESULT"
 
 # Test: compact logs event to stats
@@ -581,53 +462,100 @@ else
   echo "  ✗ compact: should log compaction event to stats"
 fi
 
-# Test: compact with empty session_id does nothing
-RESULT=$(echo '{"session_id":"","hook_event_name":"PostCompact"}' | "$COMPACT_HOOK")
+# Test: empty session_id exits cleanly (no cache work, no stats write)
+RESULT=$(echo '{"session_id":"","hook_event_name":"PostCompact"}' | bash "$HOOK")
 assert_empty "compact: empty session_id exits cleanly" "$RESULT"
 
-# Test: compact with missing session_id does nothing
-RESULT=$(echo '{"hook_event_name":"PostCompact"}' | "$COMPACT_HOOK")
+# Test: missing session_id exits cleanly
+RESULT=$(echo '{"hook_event_name":"PostCompact"}' | bash "$HOOK")
 assert_empty "compact: missing session_id exits cleanly" "$RESULT"
 
-# Test: compact clears snapshots (diff mode)
-SNAP_DIR="${TEST_DIR}/.claude/read-once/snapshots"
-mkdir -p "$SNAP_DIR"
-# Create a fake snapshot matching session hash
-if command -v sha256sum >/dev/null 2>&1; then
-  S_HASH=$(echo -n "snap-session-test" | sha256sum | cut -c1-16)
-else
-  S_HASH=$(echo -n "snap-session-test" | shasum -a 256 | cut -c1-16)
-fi
-echo "snapshot-data" > "${SNAP_DIR}/${S_HASH}-abcdef1234567890"
-
-echo '{"session_id":"snap-session-test","hook_event_name":"PostCompact"}' | "$COMPACT_HOOK"
-
+# Test: compact clears the per-session snapshots dir alongside the cache.
+# The hook stores snapshots at <project>/<scratch-root>/<sid>/read-once/snapshots/.
+# Seed a diff-mode read so the hook creates a real snapshot, then fire
+# PostCompact and assert the per-session directory is gone.
+SNAP_SESSION="snap-session-$$"
+SNAP_FILE="${TEST_DIR}/snap-test.txt"
+echo "snap-content" > "$SNAP_FILE"
+EXPECTED_SESSION_DIR="${TEST_DIR}/.scratch/${SNAP_SESSION}/read-once"
+export READ_ONCE_DIFF=1
+run_hook "$(make_input Read "$SNAP_FILE" "$SNAP_SESSION")" > /dev/null
 TOTAL=$((TOTAL + 1))
-if [ ! -f "${SNAP_DIR}/${S_HASH}-abcdef1234567890" ]; then
+if [ -d "${EXPECTED_SESSION_DIR}/snapshots" ]; then
   PASS=$((PASS + 1))
-  echo "  ✓ compact: clears snapshots for session"
+  echo "  ✓ compact: setup — snapshot dir created"
 else
   FAIL=$((FAIL + 1))
-  echo "  ✗ compact: should clear snapshots for session"
+  echo "  ✗ compact: setup — snapshot dir not created at ${EXPECTED_SESSION_DIR}/snapshots"
 fi
+
+echo '{"session_id":"'"$SNAP_SESSION"'","hook_event_name":"PostCompact"}' | bash "$HOOK"
+
+TOTAL=$((TOTAL + 1))
+if [ ! -d "$EXPECTED_SESSION_DIR" ]; then
+  PASS=$((PASS + 1))
+  echo "  ✓ compact: clears cache+snapshots dir"
+else
+  FAIL=$((FAIL + 1))
+  echo "  ✗ compact: session cache dir survived at $EXPECTED_SESSION_DIR"
+fi
+unset READ_ONCE_DIFF
+
+# Test: SessionStart with matcher=compact takes the same path
+echo "ss-content" > "${TEST_DIR}/ss-file.txt"
+SS_SESSION="ss-session-$$"
+RESULT=$(run_hook "$(make_input Read "${TEST_DIR}/ss-file.txt" "$SS_SESSION")")
+assert_empty "SessionStart(compact): pre-seed first read" "$RESULT"
+sleep 1
+RESULT=$(run_hook "$(make_input Read "${TEST_DIR}/ss-file.txt" "$SS_SESSION")")
+assert_contains "SessionStart(compact): pre-seed cache hit" "already in context" "$RESULT"
+# Fire SessionStart with compact source
+echo '{"session_id":"'"$SS_SESSION"'","hook_event_name":"SessionStart","source":"compact"}' | bash "$HOOK"
+RESULT=$(run_hook "$(make_input Read "${TEST_DIR}/ss-file.txt" "$SS_SESSION")")
+assert_empty "SessionStart(compact): re-read allowed after clear" "$RESULT"
 
 # Test: compact doesn't affect other sessions
 OTHER_SESSION="other-session-$$"
 echo "other-content" > "${TEST_DIR}/other-file.txt"
-RESULT=$(echo '{"tool_name":"Read","tool_input":{"file_path":"'"${TEST_DIR}/other-file.txt"'"},"session_id":"'"$OTHER_SESSION"'"}' | "$HOOK")
+RESULT=$(run_hook "$(make_input Read "${TEST_DIR}/other-file.txt" "$OTHER_SESSION")")
 assert_empty "compact: seed other session" "$RESULT"
 
 # Compact the original session
-echo '{"session_id":"'"$SESSION"'","hook_event_name":"PostCompact"}' | "$COMPACT_HOOK"
+echo '{"session_id":"'"$SESSION"'","hook_event_name":"PostCompact"}' | bash "$HOOK"
 
 # Other session cache should still work
 sleep 1
-RESULT=$(echo '{"tool_name":"Read","tool_input":{"file_path":"'"${TEST_DIR}/other-file.txt"'"},"session_id":"'"$OTHER_SESSION"'"}' | "$HOOK")
+RESULT=$(run_hook "$(make_input Read "${TEST_DIR}/other-file.txt" "$OTHER_SESSION")")
 assert_contains "compact: other session cache unaffected" "already in context" "$RESULT"
 
-else
-  echo "  (skipped: compact.sh not found)"
-fi
+# --- Subagent isolation ---
+# Subagents share the parent's session_id but get distinct agent_id values.
+# The hook writes per-agent cache files (<agent>.jsonl), so a parent-agent
+# read should NOT produce a "cache hit" advisory for a subagent reading
+# the same file in the same session.
+echo ""
+echo "--- Subagent isolation ---"
+
+SUB_SESSION="subagent-session-$$"
+SUB_FILE="${TEST_DIR}/sub-test.txt"
+echo "subagent-isolation-content" > "$SUB_FILE"
+
+# Main agent reads first (no agent_id → cache key "main")
+RESULT=$(run_hook "$(make_input Read "$SUB_FILE" "$SUB_SESSION")")
+assert_empty "subagent: main first read passes" "$RESULT"
+
+# Same session, different agent_id → independent cache, should be a miss
+RESULT=$(run_hook "$(make_input Read "$SUB_FILE" "$SUB_SESSION" "" "" subagent-A)")
+assert_empty "subagent: subagent A first read passes (not cached as main)" "$RESULT"
+
+# Subagent A's second read should hit subagent A's cache
+sleep 1
+RESULT=$(run_hook "$(make_input Read "$SUB_FILE" "$SUB_SESSION" "" "" subagent-A)")
+assert_contains "subagent: subagent A second read intercepted" "already in context" "$RESULT"
+
+# A third subagent_id is still a miss (per-agent isolation in both directions)
+RESULT=$(run_hook "$(make_input Read "$SUB_FILE" "$SUB_SESSION" "" "" subagent-B)")
+assert_empty "subagent: subagent B is independent of subagent A" "$RESULT"
 
 # --- Summary ---
 echo ""
