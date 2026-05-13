@@ -7,10 +7,20 @@
 #   2. $HOME/.claude/.always-allow                      (user defaults)
 #   3. $CLAUDE_PROJECT_DIR/.always-allow                (project rules)
 #
-# Each file is a flat list of POSIX ERE patterns, one per line. A command is
-# auto-allowed if it matches any entry. Comments begin with # and run to end
-# of line. Multi-command lines (containing &&, ||, ;, |, or newlines) and
-# background commands are never auto-allowed.
+# Each file is a list of POSIX ERE patterns, one per line, grouped into named
+# sections. Two sections are recognised:
+#   [allow]      — auto-allow foreground single-command invocations only.
+#                  This is the default section for unlabeled lines, so existing
+#                  flat-list configs keep working unchanged.
+#   [background] — auto-allow both foreground AND background single commands.
+#                  Use sparingly: background invocations can hide chained
+#                  payloads inside scripts. Reserve this for trusted, well-
+#                  known launchers (dev servers, watchers, file daemons).
+#
+# Multi-command lines (containing &&, ||, ;, |, or newlines) are NEVER auto-
+# allowed regardless of section.
+#
+# Comments begin with # and run to end of line.
 #
 # Disabled by setting ALWAYS_ALLOW_DISABLED=1.
 
@@ -46,12 +56,7 @@ if [[ "$COMMAND" =~ (&&|\|\||[;|]) ]] || [[ "$COMMAND" == *$'\n'* ]]; then
   exit 0
 fi
 
-# Never auto-allow background commands — they may hide chained payloads in scripts
 RUN_IN_BG=$(echo "$INPUT" | jq -r '.tool_input.run_in_background // false')
-if [ "$RUN_IN_BG" = "true" ]; then
-  log "DENIED background command: $COMMAND"
-  exit 0
-fi
 
 # ============================================================================
 # Config loader
@@ -61,17 +66,33 @@ PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 HOOK_DIR="${ALWAYS_ALLOW_HOOK_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 
 ALLOWED=()
+BG_ALLOWED=()
 
 load_config() {
-  local file="$1" raw entry
+  local file="$1" raw entry section="allow"
   [ -f "$file" ] || return 0
   while IFS= read -r raw || [ -n "$raw" ]; do
     entry="${raw%%#*}"
     entry="${entry#"${entry%%[![:space:]]*}"}"
     entry="${entry%"${entry##*[![:space:]]}"}"
     [ -z "$entry" ] && continue
-    log "allowing $entry"
-    ALLOWED+=("$entry")
+    if [[ "$entry" =~ ^\[([a-z]+)\]$ ]]; then
+      section="${BASH_REMATCH[1]}"
+      continue
+    fi
+    case "$section" in
+      allow)
+        log "allowing $entry"
+        ALLOWED+=("$entry")
+        ;;
+      background|bg)
+        log "background-allowing $entry"
+        BG_ALLOWED+=("$entry")
+        ;;
+      *)
+        log "unknown section [$section] — skipping pattern $entry"
+        ;;
+    esac
   done < "$file"
 }
 
@@ -79,20 +100,33 @@ load_config "$HOOK_DIR/default.always-allow"
 load_config "$HOME/.claude/.always-allow"
 load_config "$PROJECT_DIR/.always-allow"
 
-# Check if an operation is allowed via config
-is_allowed() {
-  local op="$1"
-  for a in "${ALLOWED[@]+"${ALLOWED[@]}"}"; do
-    if [[ $op =~ $a ]]; then
-      log "ALLOWED by config: $op"
+# Check if $1 matches any pattern in the array named by $2.
+matches() {
+  local op="$1" arr_name="$2"
+  local -n arr="$arr_name"
+  local pat
+  for pat in "${arr[@]+"${arr[@]}"}"; do
+    if [[ $op =~ $pat ]]; then
       return 0
     fi
   done
   return 1
 }
 
-if is_allowed "$COMMAND"; then
-	printf '%s\n' '{"decision": "allow"}' >&1
+if [ "$RUN_IN_BG" = "true" ]; then
+  # Background commands: only [background] patterns may auto-allow.
+  if matches "$COMMAND" BG_ALLOWED; then
+    log "ALLOWED (background) by config: $COMMAND"
+    printf '%s\n' '{"decision": "allow"}'
+  else
+    log "DENIED background command (no [background] match): $COMMAND"
+  fi
+else
+  # Foreground commands: either section may auto-allow.
+  if matches "$COMMAND" ALLOWED || matches "$COMMAND" BG_ALLOWED; then
+    log "ALLOWED by config: $COMMAND"
+    printf '%s\n' '{"decision": "allow"}'
+  fi
 fi
 
-exit 0;
+exit 0
