@@ -15,6 +15,15 @@ exist yet. Group entries under one of:
 
 ## 2026-05-13
 
+### Added
+
+- **`latest` git tag** force-pushed to every github-mirror snapshot by
+  `scripts/push-github-mirror.sh`. Gives consumers a stable submodule
+  pin: `git submodule add … && git checkout latest`. The README's
+  install and update instructions now use this flow. Refresh on the
+  consumer side needs `git fetch --tags --force origin` because `latest`
+  is a moving tag.
+
 ### Security
 
 - **bash-guard pass 2:** Substring-evasion + multi-flag rm hardening. The

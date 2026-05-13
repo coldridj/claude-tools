@@ -43,6 +43,21 @@ From the parent project's repo root:
 
 ```bash
 git submodule add <repository path> git_modules/claude-tools
+git -C git_modules/claude-tools fetch --tags origin
+git -C git_modules/claude-tools checkout latest
+git add git_modules/claude-tools
+```
+
+The `latest` tag is force-updated to every fresh github-mirror snapshot by
+`scripts/push-github-mirror.sh` (run from the pre-push hook), so pinning to
+it gives you a stable ref that always tracks the most recent published
+snapshot. To pull updates later:
+
+```bash
+git -C git_modules/claude-tools fetch --tags --force origin
+git -C git_modules/claude-tools checkout latest
+git add git_modules/claude-tools
+git commit -m "claude-tools: bump to latest"
 ```
 
 The submodule can live at any path inside the superproject — `install.sh`
@@ -324,6 +339,20 @@ docs/dumps/
 ```
 
 ## Updating
+
+If you pinned to the `latest` tag at install time:
+
+```bash
+git -C git_modules/claude-tools fetch --tags --force origin
+git -C git_modules/claude-tools checkout latest
+git add git_modules/claude-tools
+git commit -m "claude-tools: bump to latest"
+```
+
+The `--force` on the tag fetch is needed because `latest` is force-updated
+every push, and local git treats tags as immutable by default.
+
+Or to track main directly:
 
 ```bash
 git -C git_modules/claude-tools pull origin main

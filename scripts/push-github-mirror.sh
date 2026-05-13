@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # Squash a source revision into a single root commit and force-push to
-# origin/github-mirror. The github-mirror branch carries no claude-tools
+# origin/github-mirror, then force-push a `latest` tag pointing at that
+# snapshot commit. The github-mirror branch carries no claude-tools
 # history — each run produces a fresh single-commit snapshot, so the
-# public GitHub mirror exposes only the current tree.
+# public GitHub mirror exposes only the current tree. The tag gives
+# consumers a stable ref to pin a submodule to (`git submodule add` then
+# `git checkout latest`), even though the underlying SHA changes every
+# push.
 #
 # Usage:
 #   scripts/push-github-mirror.sh                  # mirror main; requires local main == origin/main
@@ -23,6 +27,7 @@ set -euo pipefail
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 
 MIRROR_BRANCH="github-mirror"
+MIRROR_TAG="latest"
 REMOTE="origin"
 
 SOURCE_LABEL=""
@@ -77,11 +82,13 @@ cleanup() {
     rm -rf "$WORKTREE"
   fi
   git branch -D "$MIRROR_BRANCH" 2>/dev/null || true
+  git tag -d "$MIRROR_TAG" 2>/dev/null || true
 }
 trap cleanup EXIT
 
-# Clear any leftover local mirror branch from a previous interrupted run.
+# Clear any leftover local mirror branch / tag from a previous interrupted run.
 git branch -D "$MIRROR_BRANCH" 2>/dev/null || true
+git tag -d "$MIRROR_TAG" 2>/dev/null || true
 
 git worktree add --detach "$WORKTREE" "$SOURCE_SHA"
 (
@@ -90,6 +97,11 @@ git worktree add --detach "$WORKTREE" "$SOURCE_SHA"
   git add -A
   git commit -m "Snapshot of $SOURCE_LABEL @ $SOURCE_SHA"
   git push --force "$REMOTE" "$MIRROR_BRANCH"
+  # Move the `latest` tag to this snapshot commit and force-push. Tags are
+  # immutable on local clones by default, so consumers may need a fetch
+  # with --tags --force / `git fetch --tags --force` to pick up the move.
+  git tag -f "$MIRROR_TAG"
+  git push --force "$REMOTE" "refs/tags/$MIRROR_TAG"
 )
 
-echo "Pushed $REMOTE/$MIRROR_BRANCH @ snapshot of $SOURCE_LABEL ($SOURCE_SHA)."
+echo "Pushed $REMOTE/$MIRROR_BRANCH and $REMOTE tag $MIRROR_TAG @ snapshot of $SOURCE_LABEL ($SOURCE_SHA)."
