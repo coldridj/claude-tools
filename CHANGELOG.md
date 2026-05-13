@@ -17,6 +17,9 @@ exist yet. Group entries under one of:
 
 ### Added
 
+- **README per-hook docs table** linking to each hook's README /
+  HARDENING / config-default file from the top-level index, so readers
+  do not need to traverse the tree to find the hook-specific reference.
 - **`latest` git tag** force-pushed to every github-mirror snapshot by
   `scripts/push-github-mirror.sh`. Gives consumers a stable submodule
   pin: `git submodule add … && git checkout latest`. The README's
