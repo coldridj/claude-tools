@@ -122,7 +122,7 @@ in this repo:
       {
         "matcher": "",
         "hooks": [
-          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/read-once/compact.sh" }
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/read-once/hook.sh" }
         ]
       }
     ],
@@ -136,7 +136,7 @@ in this repo:
       {
         "matcher": "compact",
         "hooks": [
-          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/read-once/compact.sh" }
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/read-once/hook.sh" }
         ]
       }
     ],
@@ -159,9 +159,9 @@ What each matcher block does:
 | `PreToolUse`      | `""`       | path-guard                                           | Zone + per-file write protection on every tool call.                   |
 | `PreToolUse`      | `Read`     | read-once                                            | Suppress redundant re-reads of unchanged files.                        |
 | `PreToolUse`      | `Bash`     | bash-guard → always-allow → read-guard               | Block dangerous shell, auto-approve known commands, steer file reads.  |
-| `PostCompact`     | `""`       | read-once/compact.sh                                 | Clear the read cache after context compaction.                         |
+| `PostCompact`     | `""`       | read-once/hook.sh                                    | Clear the read cache after context compaction.                         |
 | `SessionStart`    | `""`       | session-scratch                                      | mkdir + export `$CLAUDE_SESSION_SCRATCH`; sweep 7-day-stale entries.    |
-| `SessionStart`    | `compact`  | read-once/compact.sh                                 | Belt-and-suspenders cache clear if `PostCompact` didn't fire.          |
+| `SessionStart`    | `compact`  | read-once/hook.sh                                    | Belt-and-suspenders cache clear if `PostCompact` didn't fire.          |
 | `SessionEnd`      | `""`       | session-scratch                                      | Remove this session's scratch dir.                                     |
 
 Order within a single matcher matters: hooks run left-to-right and any hook

@@ -55,17 +55,24 @@ else
   SOURCE_SHA="$(git rev-parse --verify "$SOURCE_SHA^{commit}")"
 fi
 
-GIT_DIR="$(git rev-parse --git-dir)"
-WORKTREE="$GIT_DIR/mirror-worktree"
+# Temp worktree lives OUTSIDE the gitdir. An earlier version of this script
+# placed it at $GIT_DIR/mirror-worktree, which confused git's worktree
+# resolution: `git checkout --orphan` run from inside that path ended up
+# updating the main worktree's HEAD instead of the linked worktree's,
+# leaving the user's checkout stranded on github-mirror.
+WORKTREE="$(mktemp -d "${TMPDIR:-/tmp}/claude-tools-mirror.XXXXXX")"
 
 cleanup() {
-  git worktree remove --force "$WORKTREE" 2>/dev/null || true
-  rm -rf "$WORKTREE"
+  if [ -d "$WORKTREE" ]; then
+    git worktree remove --force "$WORKTREE" 2>/dev/null || true
+    rm -rf "$WORKTREE"
+  fi
   git branch -D "$MIRROR_BRANCH" 2>/dev/null || true
 }
 trap cleanup EXIT
 
-cleanup
+# Clear any leftover local mirror branch from a previous interrupted run.
+git branch -D "$MIRROR_BRANCH" 2>/dev/null || true
 
 git worktree add --detach "$WORKTREE" "$SOURCE_SHA"
 (

@@ -1,31 +1,31 @@
 #!/bin/bash
-# read-once: PreToolUse hook for Claude Code Read tool.
-# Prevents redundant file reads within a session by tracking what's been
-# read. When a file is re-read and hasn't changed (same mtime), advises
-# Claude the content is already in context.
+# read-once: combined PreToolUse / PostCompact / SessionStart(compact) hook.
 #
-# Invalidation is *deterministic* by default — driven entirely by Claude
-# Code lifecycle hooks, not by wall-clock TTL:
+# Dispatches on hook_event_name from the input JSON:
+#   - PreToolUse + tool_name=Read  → track reads; suppress redundant re-reads
+#                                    of unchanged files. Optional diff mode.
+#   - PostCompact                  → clear this session's read-once cache
+#                                    (compaction means prior context is gone).
+#   - SessionStart                 → same cache clear, as a belt-and-suspenders
+#                                    fallback if PostCompact did not fire.
+#                                    settings.json should route only the
+#                                    matcher=compact variant here.
 #
-#   - PostCompact (read-once/compact.sh):   clears this session's cache
-#                                           when context is compacted.
-#   - SessionStart matcher=compact (same):  belt-and-suspenders against
-#                                           PostCompact failure.
-#   - /clear, --resume:                     issue a new session_id; cache
-#                                           lives under
-#                                           $CLAUDE_SCRATCH_ROOT/<sid>/...,
-#                                           so a new dir is used and the
-#                                           old one is cleared by the
-#                                           session-scratch SessionEnd
-#                                           hook (or the 7d GC).
-#   - File modification (mtime check):      external edits naturally
-#                                           bypass the cache below.
+# Invalidation model is *deterministic* — driven by lifecycle hooks, not
+# wall-clock TTL:
+#   - PostCompact (this file):              clears cache on /compact.
+#   - SessionStart matcher=compact (same):  belt-and-suspenders.
+#   - /clear, --resume:                     new session_id ⇒ new cache dir
+#                                           under $CLAUDE_SCRATCH_ROOT/<sid>/...
+#                                           Old dir cleared by session-scratch
+#                                           SessionEnd (or 7d GC).
+#   - File modification (mtime check):      external edits naturally bypass.
 #
 # Subagent isolation: subagents share the parent's session_id, but the
 # hook payload exposes an `agent_id` that is unique per subagent. The
-# cache file path includes that id, so a subagent never sees a "this
-# file is already in context" hit from the parent's reads (its actual
-# context window is independent). agent_id absent => main agent.
+# cache file path includes that id, so a subagent never sees a "this file
+# is already in context" hit from the parent's reads. agent_id absent =>
+# main agent.
 #
 # A failsafe TTL is available but defaults to off (READ_ONCE_TTL=0). Set
 # READ_ONCE_TTL to a positive value (seconds) to additionally expire
@@ -33,79 +33,108 @@
 # where PostCompact may not fire reliably.
 #
 # Diff mode: When a file HAS changed since the last read, instead of
-# allowing a full re-read, shows only what changed (the diff). Saves
-# 80-95% of tokens when iterating. Enable with READ_ONCE_DIFF=1.
+# allowing a full re-read, show only what changed (the diff). Saves
+# 80–95% of tokens when iterating. Enable with READ_ONCE_DIFF=1.
 #
 # Storage layout:
 #   $CLAUDE_PROJECT_DIR/$CLAUDE_SCRATCH_ROOT/<session_id>/read-once/<agent>.jsonl
 #   $CLAUDE_PROJECT_DIR/$CLAUDE_SCRATCH_ROOT/<session_id>/read-once/snapshots/<hash>
 #   ~/.claude/read-once/stats.jsonl   (cross-session aggregation only)
 #
-# Install: Add to .claude/settings.json hooks.PreToolUse
-# Savings: ~2000+ tokens per prevented re-read
+# Install: wire each event in .claude/settings.json to this same script.
+# Savings: ~2000+ tokens per prevented re-read.
 #
-# Config (env vars):
+# Config (env vars, PreToolUse path only):
 #   READ_ONCE_MODE=warn     "warn" (default) allows read with advisory,
 #                           "deny" blocks it. warn mode prevents Edit
 #                           deadlock and parallel read cascade failures.
 #   READ_ONCE_TTL=0         Failsafe TTL in seconds. 0 (default) =
 #                           deterministic-only (hook-driven invalidation).
-#                           Positive value = also expire entries after
-#                           that many seconds as a backup for PostCompact
-#                           failure.
-#   READ_ONCE_DIFF=1        Show only diff when files change (default: 0)
+#   READ_ONCE_DIFF=1        Show only diff when files change (default: 0).
 #   READ_ONCE_DIFF_MAX=40   Max diff lines before falling back to full
-#                           re-read (default: 40)
-#   READ_ONCE_DISABLED=1    Disable the hook entirely
+#                           re-read (default: 40).
+#   READ_ONCE_DISABLED=1    Disable the hook entirely (PreToolUse path
+#                           only; cache-clear paths still run).
 #   CLAUDE_SCRATCH_ROOT     Scratch root dir (relative to $CLAUDE_PROJECT_DIR);
 #                           default ".scratch". Set in .claude/settings.json.
 
 set -euo pipefail
 
-# Allow disabling via env var
+INPUT=$(cat)
+HOOK_EVENT=$(echo "$INPUT" | jq -r '.hook_event_name // empty')
+SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty')
+
+if [ -z "$SESSION_ID" ]; then
+  exit 0
+fi
+
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
+SCRATCH_ROOT="$PROJECT_DIR/${CLAUDE_SCRATCH_ROOT:-.scratch}"
+CACHE_DIR="$SCRATCH_ROOT/$SESSION_ID/read-once"
+STATS_DIR="${HOME}/.claude/read-once"
+STATS_FILE="$STATS_DIR/stats.jsonl"
+
+# Session hash kept stable so stats stay comparable to the pre-merge format.
+if command -v sha256sum >/dev/null 2>&1; then
+  SESSION_HASH=$(echo -n "$SESSION_ID" | sha256sum | cut -c1-16)
+else
+  SESSION_HASH=$(echo -n "$SESSION_ID" | shasum -a 256 | cut -c1-16)
+fi
+
+NOW=$(date +%s)
+
+# ============================================================================
+# Cache-clear path: PostCompact and SessionStart(matcher=compact).
+# ============================================================================
+
+case "$HOOK_EVENT" in
+  PostCompact|SessionStart)
+    CLEARED=0
+    if [ -d "$CACHE_DIR" ]; then
+      CLEARED=$(find "$CACHE_DIR" -maxdepth 1 -name '*.jsonl' -exec wc -l {} + 2>/dev/null \
+                | tail -1 | awk '{print $1}')
+      CLEARED=${CLEARED:-0}
+      rm -rf "$CACHE_DIR"
+    fi
+    if [ "$CLEARED" -gt 0 ] && [ -d "$STATS_DIR" ]; then
+      echo "{\"ts\":${NOW},\"session\":\"${SESSION_HASH}\",\"event\":\"compact\",\"cleared\":${CLEARED}}" >> "$STATS_FILE"
+    fi
+    exit 0
+    ;;
+  PreToolUse) ;;
+  *) exit 0 ;;
+esac
+
+# ============================================================================
+# PreToolUse path: read-once for Read tool.
+# ============================================================================
+
 if [ "${READ_ONCE_DISABLED:-0}" = "1" ]; then
   exit 0
 fi
 
-# Read hook input from stdin
-INPUT=$(cat)
-
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty')
-
-# Only handle Read tool
 if [ "$TOOL_NAME" != "Read" ]; then
   exit 0
 fi
 
 FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
-SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty')
 AGENT_ID=$(echo "$INPUT" | jq -r '.agent_id // empty')
 OFFSET=$(echo "$INPUT" | jq -r '.tool_input.offset // empty')
 LIMIT=$(echo "$INPUT" | jq -r '.tool_input.limit // empty')
 
-if [ -z "$FILE_PATH" ] || [ -z "$SESSION_ID" ]; then
+if [ -z "$FILE_PATH" ]; then
   exit 0
 fi
 
 # Partial reads (offset/limit) are never cached — user is exploring
-# a large file piece by piece, each chunk is different content
+# a large file piece by piece, each chunk is different content.
 if [ -n "$OFFSET" ] || [ -n "$LIMIT" ]; then
   exit 0
 fi
 
-# Project dir is exposed to hook subprocesses by the Claude Code harness.
-PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
-
-# Per-session, per-agent cache directory inside the project scratch tree.
-# session-scratch hook auto-cleans this on SessionEnd / 7d GC.
-SCRATCH_ROOT="$PROJECT_DIR/${CLAUDE_SCRATCH_ROOT:-.scratch}"
-CACHE_DIR="$SCRATCH_ROOT/$SESSION_ID/read-once"
 mkdir -p "$CACHE_DIR"
-
-# Cross-session stats stay in $HOME so `read-once stats` aggregates over time.
-STATS_DIR="${HOME}/.claude/read-once"
 mkdir -p "$STATS_DIR"
-STATS_FILE="$STATS_DIR/stats.jsonl"
 
 # Mode: "warn" (default) allows read with advisory message, "deny" blocks it.
 # warn mode fixes: Edit tool deadlock, parallel read cascade failures.
@@ -127,8 +156,6 @@ fi
 # a backup for environments where PostCompact may not fire.
 TTL="${READ_ONCE_TTL:-0}"
 
-NOW=$(date +%s)
-
 # Agent key — distinguishes main agent from each subagent. Subagents
 # share the parent's session_id but have distinct .agent_id values.
 # Sanitise for filename use (uuid chars are safe; this is belt-and-braces).
@@ -137,14 +164,6 @@ AGENT_KEY=$(printf '%s' "$AGENT_KEY_RAW" | tr -cd 'a-zA-Z0-9._-')
 [ -z "$AGENT_KEY" ] && AGENT_KEY="main"
 
 CACHE_FILE="${CACHE_DIR}/${AGENT_KEY}.jsonl"
-
-# Session hash retained only as a stats label so historical stats remain
-# comparable to the previous (pre-per-session-scratch) format.
-if command -v sha256sum >/dev/null 2>&1; then
-  SESSION_HASH=$(echo -n "$SESSION_ID" | sha256sum | cut -c1-16)
-else
-  SESSION_HASH=$(echo -n "$SESSION_ID" | shasum -a 256 | cut -c1-16)
-fi
 
 # Snapshot path for this file (used in diff mode) — per-agent so a
 # subagent's diff baseline does not collide with the parent's.
