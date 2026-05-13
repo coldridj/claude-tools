@@ -17,11 +17,14 @@ By default, read-once uses **warn mode**: it allows the read but attaches an adv
   `PreToolUse` runs the read-tracking logic, `PostCompact` /
   `SessionStart(matcher=compact)` clear the cache. There is no longer a
   separate `compact.sh`; route all three events at `hook.sh`.
-- **Per-session scratch storage.** Cache files live at
-  `$CLAUDE_PROJECT_DIR/$CLAUDE_SCRATCH_ROOT/<session_id>/read-once/<agent>.jsonl`
-  (where `$CLAUDE_SCRATCH_ROOT` is set in `.claude/settings.json`, default
-  `.scratch`). The `session-scratch` SessionEnd hook reclaims the directory
-  automatically. Cross-session stats persist at `~/.claude/read-once/stats.jsonl`.
+- **Per-session scratch storage.** Cache files live under the
+  `session-scratch` hook's per-session directory at
+  `<session-scratch>/read-once/<agent>.jsonl`. The directory is created
+  on `SessionStart` and reclaimed on `SessionEnd` automatically — see
+  [`hooks/session-scratch/README.md`](../session-scratch/README.md) for
+  the env-var (`CLAUDE_SCRATCH_ROOT` / `CLAUDE_SESSION_SCRATCH`) details
+  and the full path resolution. Cross-session stats are kept separately
+  at `~/.claude/read-once/stats.jsonl`.
 - **Subagent isolation.** The hook reads `agent_id` from the payload and
   writes a separate cache file per agent (`main.jsonl` for the parent,
   `<agent_id>.jsonl` per subagent). Subagents share the parent's
@@ -97,8 +100,10 @@ read-once handles this two ways:
    case `PostCompact` does not fire in your environment.
 
 The per-session cache directory is also reclaimed by the `session-scratch`
-SessionEnd hook, and a new `session_id` (from `/clear` / `--resume`) routes
-the cache to a fresh directory automatically.
+hook on `SessionEnd`, and a new `session_id` (from `/clear` / `--resume`)
+routes the cache to a fresh directory automatically — see
+[`hooks/session-scratch/README.md`](../session-scratch/README.md) for the
+lifecycle details.
 
 ## Stats
 
