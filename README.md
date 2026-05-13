@@ -204,150 +204,28 @@ What each matcher block does:
 Order within a single matcher matters: hooks run left-to-right and any hook
 that exits 2 short-circuits the rest of the chain.
 
-## Per-session scratch
-
-The `session-scratch` hook gives every Claude Code session its own scratch
-subdirectory and exposes it through two environment variables:
-
-| Variable                   | Set by                             | Value                                                       |
-|----------------------------|------------------------------------|-------------------------------------------------------------|
-| `CLAUDE_SCRATCH_ROOT`      | `.claude/settings.json` `env`      | Project-relative directory name. Default: `.scratch`.       |
-| `CLAUDE_SESSION_SCRATCH`   | `session-scratch` SessionStart     | `$CLAUDE_PROJECT_DIR/$CLAUDE_SCRATCH_ROOT/$session_id`.     |
-
-The full directory is `<project>/<scratch-root>/<session_id>/`. Concurrent
-sessions each get their own subdirectory so writes never collide.
-
-Lifecycle:
-
-- **SessionStart** — `mkdir -p` the per-session dir; export both variables via
-  the harness env file; sweep entries older than 7 days at the top level of
-  `$CLAUDE_SCRATCH_ROOT/` (covers crashed sessions that never reached
-  SessionEnd).
-- **SessionEnd** — `rm -rf` the per-session dir.
-
-Use `$CLAUDE_SESSION_SCRATCH` (not `$CLAUDE_SCRATCH_ROOT`) for all
-within-session scratch writes — curl-to-file dumps, commit-message files for
-`git commit -F`, generated `.new` files when path-guard blocks a write, etc.
-The variable is exported only inside Claude's own bash subprocess; if you
-need a path to hand to the user for them to run in their own shell, write
-it repo-relative (e.g. `.scratch/<session_id>/foo.new`).
-
-`CLAUDE_SCRATCH_ROOT` is read with a fallback of `.scratch`, so the hook
-suite works even before you've configured the `env` block; setting it in
-`settings.json` only matters if you want the directory name to differ.
-
-Other hooks that respect `CLAUDE_SCRATCH_ROOT`:
-
-- **read-once** stores its per-session cache at
-  `$CLAUDE_SCRATCH_ROOT/$session_id/read-once/` so the cache is reclaimed
-  automatically when the session ends.
-- **path-guard**'s "write to scratch and ask the user to `mv`" workflow points
-  at `$CLAUDE_SESSION_SCRATCH/<basename>.new`.
-
 ## Configuration
 
-Each hook (other than session-scratch) loads layered configuration: shipped
-defaults, then user-wide overrides under `$HOME/.claude/.<hook>`, then
-project-local overrides under `$CLAUDE_PROJECT_DIR/.<hook>`. All three files
-concatenate, so layered files **add to** the rule set — there is no `!`
-negation. To drop a default rule, comment it out in the shipped file.
+Each hook documents its own config file, env vars, and behaviour in its
+README (linked from the [Per-hook docs](#per-hook-docs) table above).
+Three of the hooks use a layered config file at the project root:
 
-| Hook           | Project-root file | Purpose                                                              |
-|----------------|-------------------|----------------------------------------------------------------------|
-| `always-allow` | `.always-allow`   | ERE patterns auto-approved for Bash (e.g. project build scripts).    |
-| `path-guard`   | `.path-guard`     | `[secret]` / `[protected]` rules in addition to shipped defaults.    |
-| `read-guard`   | `.read-guard`     | Path prefixes exempt from the "use Read tool" guard.                 |
+| Hook           | Project file     | Documented in                                              |
+|----------------|------------------|------------------------------------------------------------|
+| `always-allow` | `.always-allow`  | [`hooks/always-allow/README.md`](hooks/always-allow/README.md) |
+| `path-guard`   | `.path-guard`    | [`hooks/path-guard/README.md`](hooks/path-guard/README.md)     |
+| `read-guard`   | `.read-guard`    | [`hooks/read-guard/README.md`](hooks/read-guard/README.md)     |
 
-### path-guard
+Each is loaded as: shipped defaults → `$HOME/.claude/.<hook>` (user-wide
+overrides) → `$CLAUDE_PROJECT_DIR/.<hook>` (project overrides). All three
+files concatenate, so layered files **add to** the rule set — there is
+no `!` negation. To drop a default rule, comment it out in the shipped
+file.
 
-`.path-guard` files have up to two sections — `[secret]` (block both Read and
-Write) and `[protected]` (block Write only). Patterns use a gitignore-flavoured
-glob:
-
-| Token         | Meaning                                                            |
-|---------------|--------------------------------------------------------------------|
-| `*`           | Any characters within a path segment (no `/`).                     |
-| `**`          | Any number of path segments.                                       |
-| `?`           | One character (no `/`).                                            |
-| `[abc]`       | Character class.                                                   |
-| `~`           | Leading tilde expands to `$HOME`.                                  |
-| `/foo/bar`    | Leading `/` anchors to filesystem root.                            |
-| `foo/bar`     | No leading `/` matches as basename or path-suffix.                 |
-| `dir/**`      | Also matches the directory itself, not just its contents.          |
-
-Example project `.path-guard`:
-
-```ini
-[secret]
-
-# Block both Read and Write on credential files anywhere in the project.
-**/secrets/*.toml
-**/*.credentials.json
-
-[protected]
-
-# Block Write only — files can still be inspected with the Read tool.
-deployment/k8s/production/**
-migrations/**
-schema.sql
-
-# The shipped pattern matches .claude/hooks/**/hook.sh, but path-guard
-# resolves through symlinks via realpath -m. install.sh writes these
-# mirrors so the realpath of a symlinked hook stays write-blocked.
-git_modules/claude-tools/hooks/**/hook.sh
-git_modules/claude-tools/hooks/**/compact.sh
-```
-
-Example user-wide `~/.claude/.path-guard`:
-
-```ini
-[secret]
-
-# Personal credential stores not covered by the shipped defaults.
-~/.config/op/**
-~/.config/rclone/rclone.conf
-~/Vault/**
-
-[protected]
-
-# Personal dotfiles you never want an agent to edit accidentally.
-~/.bashrc
-~/.zshrc
-~/.gitconfig
-```
-
-The shipped `hooks/path-guard/default.path-guard` documents the full pattern
-syntax inline and ships sensible defaults for SSH keys, AWS/GCP/Azure
-credentials, `/etc/shadow`, certificate/key extensions, `.env*`, and so on —
-override at the user or project layer rather than editing the default file in
-the submodule.
-
-### always-allow
-
-`.always-allow` files are flat lists of POSIX ERE patterns. A Bash command is
-auto-approved if it matches any entry. Multi-command lines (`&&`, `||`, `;`,
-`|`, newlines) and background commands are never auto-approved.
-
-Example project `.always-allow`:
-
-```regex
-# Project build scripts that this agent runs frequently.
-^(bash )?scripts/build[[:alnum:]_-]*\.sh
-^(bash )?scripts/run\.sh
-^npm run (test|lint|typecheck)$
-```
-
-### read-guard
-
-`.read-guard` files list directory prefixes where the "use Read tool" guard
-does not apply. Include the trailing `/`. read-guard additionally auto-exempts
-`$CLAUDE_SCRATCH_ROOT/` (default `.scratch/`) so diagnostic dumps under the
-session scratch dir can always be inspected with shell tools.
-
-```
-build/output/
-docs/dumps/
-```
+The per-session-scratch env vars (`CLAUDE_SCRATCH_ROOT`,
+`CLAUDE_SESSION_SCRATCH`), their lifecycle, and the hooks that consume
+them are documented in
+[`hooks/session-scratch/README.md`](hooks/session-scratch/README.md).
 
 ## Updating
 

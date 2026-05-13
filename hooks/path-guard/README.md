@@ -69,17 +69,47 @@ Example project `.path-guard`:
 ```ini
 [secret]
 
+# Block both Read and Write on credential files anywhere in the project.
 **/secrets/*.toml
 **/*.credentials.json
 
 [protected]
 
+# Block Write only — files can still be inspected with the Read tool.
 deployment/k8s/production/**
 migrations/**
 schema.sql
+
+# The shipped default matches `.claude/hooks/**/hook.sh`, but path-guard
+# resolves through symlinks via realpath. `install.sh` writes these
+# realpath mirrors so a symlinked hook stays write-blocked.
+git_modules/claude-tools/hooks/**/hook.sh
+git_modules/claude-tools/hooks/**/compact.sh
 ```
 
-The shipped `default.path-guard` documents the full syntax inline.
+Example user-wide `~/.claude/.path-guard`:
+
+```ini
+[secret]
+
+# Personal credential stores not covered by the shipped defaults.
+~/.config/op/**
+~/.config/rclone/rclone.conf
+~/Vault/**
+
+[protected]
+
+# Personal dotfiles you never want an agent to edit accidentally.
+~/.bashrc
+~/.zshrc
+~/.gitconfig
+```
+
+The shipped `default.path-guard` documents the full syntax inline and
+ships sensible defaults for SSH keys, AWS/GCP/Azure credentials,
+`/etc/shadow`, cert/key extensions, `.env*`, `.git/**`, and so on.
+Override at the user or project layer rather than editing the default
+file in the submodule.
 
 ## Env vars
 

@@ -69,6 +69,20 @@ harness exposes.
 The 7-day GC on SessionStart is the failsafe for the only path neither
 event covers: process abort (Ctrl-C, kill -9, crash).
 
+## Env vars
+
+| Variable                   | Set by                             | Value                                                       |
+|----------------------------|------------------------------------|-------------------------------------------------------------|
+| `CLAUDE_SCRATCH_ROOT`      | `.claude/settings.json` `env`      | Project-relative directory name. Default: `.scratch`.       |
+| `CLAUDE_SESSION_SCRATCH`   | this hook on SessionStart          | `$CLAUDE_PROJECT_DIR/$CLAUDE_SCRATCH_ROOT/$session_id`.     |
+
+The full directory is `<project>/<scratch-root>/<session_id>/`. Concurrent
+sessions each get their own subdirectory so writes never collide.
+
+`CLAUDE_SCRATCH_ROOT` is read with a fallback of `.scratch`, so the hook
+suite works even before you've configured the `env` block; setting it in
+`settings.json` only matters if you want the directory name to differ.
+
 ## Usage
 
 In CLAUDE.md and scripts, refer to scratch paths as
@@ -80,6 +94,25 @@ Example:
 ```sh
 curl -s "$URL" > "$CLAUDE_SESSION_SCRATCH/out.json"
 ```
+
+Use `$CLAUDE_SESSION_SCRATCH` (not `$CLAUDE_SCRATCH_ROOT`) for all
+within-session scratch writes — curl-to-file dumps, commit-message files
+for `git commit -F`, generated `.new` files when path-guard blocks a
+write, etc. The variable is exported only inside Claude's own bash
+subprocess; if you need a path to hand to the user for them to run in
+their own shell, write it repo-relative (e.g.
+`.scratch/<session_id>/foo.new`).
+
+## Other hooks that use these variables
+
+- **read-once** stores its per-session cache at
+  `$CLAUDE_SCRATCH_ROOT/$session_id/read-once/` so the cache is
+  reclaimed automatically when the session ends.
+- **path-guard**'s "write to scratch and ask the user to `mv`" workflow
+  points the agent at `$CLAUDE_SESSION_SCRATCH/<basename>.new`.
+- **read-guard** auto-exempts the scratch root (`$CLAUDE_SCRATCH_ROOT/`)
+  from its "use Read tool" rule so diagnostic dumps under the per-session
+  scratch dir can be inspected with shell tools.
 
 ## CLAUDE.md suggestions
 
