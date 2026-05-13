@@ -1,0 +1,101 @@
+# default.path-guard — shipped defaults for the path-guard hook.
+#
+# Two sections:
+#   [secret]    — block Read AND Write (file is sensitive; agent should not
+#                 see its contents nor modify it)
+#   [protected] — block Write only (file is readable for inspection but
+#                 should not be modified by the agent)
+#
+# Pattern syntax (glob, gitignore-flavoured):
+#   *             matches any chars within a path segment (no /)
+#   **            matches any number of path segments
+#   ?             matches one char (no /)
+#   [abc]         char class
+#   ~             leading tilde expands to $HOME
+#   leading /     anchors to filesystem root
+#   no leading /  matches the basename anywhere in the path
+#   trailing /**  also matches the directory itself (not just its contents)
+#
+# No `!` negation. To remove a default rule, comment out the line in this
+# file or override at the user level (~/.claude/.path-guard) or project
+# level ($CLAUDE_PROJECT_DIR/.path-guard) — all three files concatenate.
+#
+# Comments begin with # and run to end of line.
+
+[secret]
+
+# === SSH keys, config, known_hosts ===
+~/.ssh/**
+/root/.ssh/**
+/home/*/.ssh/**
+
+# === Cloud / service credentials ===
+~/.aws/**
+~/.gnupg/**
+~/.kube/**
+~/.config/gh/**
+~/.netrc
+~/.docker/config.json
+
+# === System secret files ===
+/etc/shadow
+/etc/gshadow
+/etc/sudoers
+/etc/sudoers.d/**
+/proc/*/environ
+
+# === SSH/TLS private keys by basename (anywhere on disk) ===
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+*_rsa
+*_dsa
+*_ecdsa
+*_ed25519
+
+# === Cert / key / keystore extensions (anywhere on disk) ===
+*.pem
+*.key
+*.crt
+*.cer
+*.der
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.keytab
+
+# === GPG / OpenVPN / KeePass / age ===
+*.asc
+*.gpg
+*.ovpn
+*.kdbx
+*.age
+
+# === Environment-variable files (commonly contain secrets) ===
+.env
+.env.*
+
+# === Frequently-used secret file names ===
+secrets.yaml
+secrets.yml
+credentials
+credentials.json
+service-account*.json
+
+[protected]
+
+# === Claude Code configuration ===
+.claude/settings.json
+.claude/settings.local.json
+~/.claude/settings.json
+~/.claude/settings.local.json
+
+# === CLAUDE.md (project + user) ===
+CLAUDE.md
+~/.claude/CLAUDE.md
+
+# === Hook scripts — the actual guard executables, not tests or docs ===
+.claude/hooks/**/hook.sh
+.claude/hooks/**/compact.sh

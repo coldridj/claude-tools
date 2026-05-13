@@ -1,0 +1,15 @@
+# default.always-allow — shipped defaults for the always-allow hook.
+#
+# Flat list of POSIX ERE patterns. A Bash command is auto-allowed (the
+# permission prompt is suppressed) if it matches any entry. Multi-command
+# lines (containing &&, ||, ;, |, or newlines) and background commands are
+# never auto-allowed regardless of these rules.
+#
+# Loaded together with $HOME/.claude/.always-allow and
+# $CLAUDE_PROJECT_DIR/.always-allow — all three files concatenate. To remove
+# a default rule, comment out the line here; there is no `!` negation.
+#
+# Comments begin with # and run to end of line.
+#
+# This file ships with the always-allow hook. Keep it free of
+# project-specific patterns — those belong in $CLAUDE_PROJECT_DIR/.always-allow.
