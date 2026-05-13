@@ -50,6 +50,11 @@ exist yet. Group entries under one of:
 
 ### Changed
 
+- **`README.md`:** prominent disclaimer that most of the code is
+  AI-generated and unaudited (hardening passes are real, but the
+  underlying code is not security-audited — treat as defence in depth,
+  not a trusted boundary). License section now inlines a plain-language
+  summary of the Unlicense terms instead of a bare `See LICENSE`.
 - **`hooks/read-once/`:** merged `compact.sh` into `hook.sh`. The single
   hook now dispatches on `hook_event_name` — `PreToolUse` runs the
   existing read-once tracking, `PostCompact` and `SessionStart` clear

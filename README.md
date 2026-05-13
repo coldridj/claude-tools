@@ -5,6 +5,17 @@ vendored into a project as a git submodule. Each hook lives in its own
 directory under `hooks/`; an `install.sh` at the repo root wires them into the
 parent project's `.claude/hooks/` directory as per-hook symlinks.
 
+> **⚠ Mostly AI-generated and unaudited.** The bulk of the code here — hooks,
+> tests, scripts, and most of this README — was written by Claude Code with
+> light human review. The hardening passes are real (see
+> `hooks/path-guard/HARDENING.md` and `hooks/bash-guard/HARDENING.md` for the
+> jailbreak probes and what they close), but the underlying code has not been
+> independently security-audited. Treat it as **defence in depth, not a
+> trusted boundary**. Review hook scripts before installing them, and never
+> rely on these guards as your only protection against an agent doing
+> something destructive. The Unlicense (below) disclaims all warranty —
+> that disclaimer is doing real work here.
+
 ## Layout
 
 ```
@@ -334,4 +345,10 @@ Re-run `install.sh` after a pull if a new hook has been added upstream.
 
 ## License
 
-See `LICENSE`.
+Released into the public domain under [the Unlicense](https://unlicense.org/).
+In short: you may copy, modify, redistribute, sell, or build on this software
+for any purpose without permission or attribution. There is **no warranty**:
+the software is provided as-is, and the authors disclaim all liability for
+anything that happens when you run it.
+
+Full text in `LICENSE`.
