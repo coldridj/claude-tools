@@ -441,6 +441,38 @@ layered_allow "empty default file: nothing blocked" \
   "" "" "" \
   '{"tool_name":"Edit","tool_input":{"file_path":".any-relative-file","old_string":"a","new_string":"b"}}'
 
+echo "=== chmod / chown / chattr attacks on protected files ==="
+# Defence-in-depth: an attacker who can't modify a hook's contents could
+# disable it by stripping the executable bit. WRITE_CMDS_RE in the
+# path-guard Bash backstop includes \bchmod\b, \bchown\b, \bchattr\b, so
+# any of these naming a protected path on the same line is treated as a
+# write and blocked. Pin that behaviour here.
+
+expect_block "chmod -x on path-guard hook.sh" \
+  '{"tool_name":"Bash","tool_input":{"command":"chmod -x /test/project/.claude/hooks/path-guard/hook.sh"}}'
+
+expect_block "chmod 644 on bash-guard hook.sh" \
+  '{"tool_name":"Bash","tool_input":{"command":"chmod 644 /test/project/.claude/hooks/bash-guard/hook.sh"}}'
+
+expect_block "chmod a-x on hook.sh" \
+  '{"tool_name":"Bash","tool_input":{"command":"chmod a-x /test/project/.claude/hooks/always-allow/hook.sh"}}'
+
+expect_block "chmod 000 on settings.json" \
+  '{"tool_name":"Bash","tool_input":{"command":"chmod 000 /test/project/.claude/settings.json"}}'
+
+expect_block "chmod 000 on CLAUDE.md" \
+  '{"tool_name":"Bash","tool_input":{"command":"chmod 000 /test/project/CLAUDE.md"}}'
+
+expect_block "chown other:other on hook.sh" \
+  '{"tool_name":"Bash","tool_input":{"command":"chown nobody:nobody /test/project/.claude/hooks/path-guard/hook.sh"}}'
+
+expect_block "chattr +i on hook.sh (lock attribute)" \
+  '{"tool_name":"Bash","tool_input":{"command":"chattr +i /test/project/.claude/hooks/path-guard/hook.sh"}}'
+
+# chmod on a non-protected file inside the project is allowed.
+expect_allow "chmod +x on non-protected script (allowed)" \
+  '{"tool_name":"Bash","tool_input":{"command":"chmod +x /test/project/scripts/my-new-script.sh"}}'
+
 echo "=== Symlink resolution: writes follow realpath -m to protected target ==="
 # BUGS.md gap: existing probes test literal path text only. This section
 # creates real on-disk symlinks pointing at protected destinations and
