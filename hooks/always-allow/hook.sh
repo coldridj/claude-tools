@@ -39,10 +39,27 @@
 # Comments begin with # and run to end of line.
 #
 # Disabled by setting ALWAYS_ALLOW_DISABLED=1.
+#
+# Fail-open behaviour:
+#   - If `jq` is missing from PATH the hook emits no decision and exits 0.
+#     The harness then falls back to the default permission flow (a prompt).
+#     Treating a missing dependency as a hard block would lock the user out;
+#     failing open just degrades the auto-approve speed-up.
+#   - Invalid POSIX ERE patterns in a config file are skipped at load time
+#     with a warning to stderr. Other patterns in the same file continue to
+#     load and match normally. Treating one bad pattern as a hard abort
+#     would mean a typo in any rule file kills the whole hook.
 
 set -euo pipefail
 
 if [ "${ALWAYS_ALLOW_DISABLED:-0}" = "1" ]; then
+  exit 0
+fi
+
+# Dependency check: jq is required by every subsequent step. Fail-open so a
+# missing dependency degrades to a permission prompt rather than blocking.
+if ! command -v jq >/dev/null 2>&1; then
+  echo "[always-allow] jq not found in PATH — fail-open, no auto-allow this call" >&2
   exit 0
 fi
 
@@ -149,6 +166,19 @@ HOOK_DIR="${ALWAYS_ALLOW_HOOK_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ALLOWED=()
 BG_ALLOWED=()
 
+# Validate that $1 is a syntactically valid POSIX ERE. Bash's `[[ x =~ pat ]]`
+# returns 0/1 for match/no-match and 2 when the pattern is malformed; we use
+# that to skip bad patterns at load time instead of letting the regex match
+# error abort the hook later.
+ere_is_valid() {
+  local pat="$1" rc
+  set +e
+  [[ "" =~ $pat ]]
+  rc=$?
+  set -e
+  [ "$rc" -lt 2 ]
+}
+
 load_config() {
   local file="$1" raw entry section="allow"
   [ -f "$file" ] || return 0
@@ -159,6 +189,10 @@ load_config() {
     [ -z "$entry" ] && continue
     if [[ "$entry" =~ ^\[([a-z]+)\]$ ]]; then
       section="${BASH_REMATCH[1]}"
+      continue
+    fi
+    if ! ere_is_valid "$entry"; then
+      echo "[always-allow] invalid ERE in $file: $entry — skipping" >&2
       continue
     fi
     case "$section" in

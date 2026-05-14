@@ -441,6 +441,63 @@ layered_allow "empty default file: nothing blocked" \
   "" "" "" \
   '{"tool_name":"Edit","tool_input":{"file_path":".any-relative-file","old_string":"a","new_string":"b"}}'
 
+echo "=== Symlink resolution: writes follow realpath -m to protected target ==="
+# BUGS.md gap: existing probes test literal path text only. This section
+# creates real on-disk symlinks pointing at protected destinations and
+# verifies the hook follows them via realpath -m before the rule check.
+# The symlink targets do not need to exist on disk — path-guard's
+# normalize_path applies `realpath -m` which canonicalises missing
+# components without failing.
+
+SYMLINK_DIR=$(mktemp -d)
+
+# Symlink at <tmp>/redirect-settings → /test/project/.claude/settings.json.
+# Direct Edit on a settings.json path is already blocked elsewhere; this
+# variant proves the block fires through a real symlink, not just on a
+# literal path string.
+ln -s "/test/project/.claude/settings.json" "$SYMLINK_DIR/redirect-settings"
+
+expect_block "Edit through real symlink to project settings.json" \
+  '{"tool_name":"Edit","tool_input":{"file_path":"'"$SYMLINK_DIR/redirect-settings"'","old_string":"a","new_string":"b"}}'
+
+expect_block "Write through real symlink to project settings.json" \
+  '{"tool_name":"Write","tool_input":{"file_path":"'"$SYMLINK_DIR/redirect-settings"'","content":"x"}}'
+
+# Bash redirect through the same symlink.
+expect_block "Bash redirect '>' through real symlink to protected file" \
+  '{"tool_name":"Bash","tool_input":{"command":"echo x > '"$SYMLINK_DIR/redirect-settings"'"}}'
+
+# Symlink pointing at a project hook.sh — also protected via the path-guard
+# default rules.
+ln -s "/test/project/.claude/hooks/bash-guard/hook.sh" "$SYMLINK_DIR/redirect-hook"
+
+expect_block "Edit through symlink to bash-guard hook.sh" \
+  '{"tool_name":"Edit","tool_input":{"file_path":"'"$SYMLINK_DIR/redirect-hook"'","old_string":"a","new_string":"b"}}'
+
+# Symlink chain: <tmp>/chain1 → <tmp>/chain2 → /test/project/CLAUDE.md.
+# realpath -m follows the whole chain.
+ln -s "/test/project/CLAUDE.md" "$SYMLINK_DIR/chain2"
+ln -s "$SYMLINK_DIR/chain2"      "$SYMLINK_DIR/chain1"
+
+expect_block "Edit through symlink chain to CLAUDE.md" \
+  '{"tool_name":"Edit","tool_input":{"file_path":"'"$SYMLINK_DIR/chain1"'","old_string":"a","new_string":"b"}}'
+
+# Symlink pointing at a NON-protected path inside the project zone — must
+# remain allowed.
+ln -s "/test/project/src/app.cs" "$SYMLINK_DIR/redirect-allowed"
+
+expect_allow "Edit through symlink to non-protected file inside project" \
+  '{"tool_name":"Edit","tool_input":{"file_path":"'"$SYMLINK_DIR/redirect-allowed"'","old_string":"a","new_string":"b"}}'
+
+# Symlink pointing OUT of the allowed zones — zone check blocks regardless
+# of [protected] rules.
+ln -s "/etc/passwd" "$SYMLINK_DIR/redirect-out-of-zone"
+
+expect_block "Edit through symlink to /etc/passwd (zone check)" \
+  '{"tool_name":"Edit","tool_input":{"file_path":"'"$SYMLINK_DIR/redirect-out-of-zone"'","old_string":"a","new_string":"b"}}'
+
+rm -rf "$SYMLINK_DIR"
+
 echo "=== Repeat-suppression on block_write (CLAUDE_SESSION_SCRATCH set) ==="
 # When CLAUDE_SESSION_SCRATCH points at a real dir, the first write-block emits
 # the full scratch+mv workflow and touches a marker file; subsequent blocks

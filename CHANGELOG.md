@@ -41,6 +41,41 @@ record of what was resolved.
   default, and trailing-slash normalisation. Suite expanded from 75 to
   91/91.
 
+- **`hooks/test-all.sh`: top-level runner that invokes every hook's
+  `test.sh` in sequence.** Discovers suites by walking hook subdirs.
+  Streams per-suite PASS/FAIL with wall-clock; on any failure, dumps
+  the suite output and exits non-zero. `-v` mode also streams output
+  for passing suites. Wired as the pre-commit test command in
+  CLAUDE.md (replaces the per-hook list).
+
+### Fixed
+
+- **`hooks/always-allow/hook.sh`: fail-open on missing `jq` or invalid
+  POSIX ERE.** Two previously-fatal failure modes that aborted the hook
+  hard under `set -euo pipefail` and (via the non-zero exit) blocked
+  the underlying tool call. Fixes:
+  - Early `command -v jq` check at hook entry; if jq is missing, emit
+    a stderr warning and exit 0 so the harness falls back to the
+    default permission prompt instead of blocking.
+  - `ere_is_valid` validator wraps `[[ "" =~ $pat ]]` with errexit
+    suspended, returns false when the test's exit code is 2 (the
+    "malformed pattern" code). `load_config` calls it on every pattern
+    and skips bad ones with a stderr warning, so a typo in any rule
+    file no longer kills the whole hook.
+  - 5 new test cases in `hooks/always-allow/test.sh` covering missing
+    jq, invalid ERE in each of the three config layers, and an all-
+    invalid config. Suite expanded 87 → 92.
+
+### Added (continued)
+
+- **`hooks/path-guard/test.sh`: real-symlink resolution test section.**
+  Creates on-disk symlinks (single-hop, chain, and pointing
+  inside/outside the project zone), verifies `realpath -m` follows
+  them before the rule check. 7 cases covering Edit / Write / Bash
+  redirect through symlinks to protected paths, an allow-case
+  symlink, and a zone-violation symlink. Closes the BUGS.md
+  "symlink resolution not exercised end-to-end" gap.
+
 ### Documentation
 
 - **`BUGS.md`: cleaned up resolved entries** and corrected the cross-

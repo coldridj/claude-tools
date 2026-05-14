@@ -7,20 +7,12 @@ grouped by hook, then by severity (highest first).
 
 ## always-allow
 
-- [ ] **`jq` failure aborts the hook hard.** If `jq` is missing from
-  `$PATH`, `set -euo pipefail` causes the whole hook to exit non-zero;
-  the harness then treats the call as blocked. The hook should pre-check
-  `command -v jq` and fail-open with a warning. See
-  `hooks/always-allow/HARDENING.md` (I/O / runtime).
-- [ ] **Invalid POSIX ERE in a `.always-allow` pattern aborts match.**
-  Same `set -euo pipefail` interaction — a malformed pattern causes
-  `[[ $op =~ $pat ]]` to error and the hook exits non-zero without
-  emitting a decision. Pre-validate patterns at load time. See
-  `hooks/always-allow/HARDENING.md` (parser).
-- [ ] **Command normalisation missing.** `bash scripts/build.sh` works
-  but `  bash scripts/build.sh` (leading whitespace), `./scripts/build.sh`,
-  absolute paths, and `bash -c "scripts/build.sh"` do not match common
-  patterns. Documented in `hooks/always-allow/HARDENING.md` (matcher).
+- **(deferred to daemon rewrite) Command normalisation missing.**
+  `bash scripts/build.sh` works but `  bash scripts/build.sh` (leading
+  whitespace), `./scripts/build.sh`, absolute paths, and
+  `bash -c "scripts/build.sh"` do not match common patterns. Documented
+  in `hooks/always-allow/HARDENING.md` (matcher). Defer to the C# daemon
+  rewrite which will do proper command parsing.
 
 ## read-once
 
@@ -43,14 +35,13 @@ grouped by hook, then by severity (highest first).
   out of `WRITE_CMDS_RE` and parse their args to identify the final
   positional (the destination). Workarounds for now: rename the
   destination to a non-protected basename, or use `Read` + `Write`.
-- [ ] **`COMMAND_NORM` / `COMMAND_FLAT` normalisation lacks unit
-  tests.** Pass-6 added end-to-end jailbreak probes for line-
-  continuation collapse and quote-stripping but no targeted unit tests
-  on the normalisation functions in isolation.
-- [ ] **Symlink resolution is not exercised end-to-end.** The "tilde
-  redirect to hook script (resolved)" probe tests the literal path
-  text only — no test creates an actual symlink and verifies
-  `realpath -m` resolves through it before the rule check.
+- **(deferred to daemon rewrite) `COMMAND_NORM` / `COMMAND_FLAT`
+  normalisation lacks unit tests in isolation.** Pass-6 added end-to-end
+  jailbreak probes for line-continuation collapse and quote-stripping;
+  the normalisation functions themselves are not directly tested.
+  Extracting them as sourceable helpers is a code change to a hook
+  about to be replaced by the C# daemon, so defer the targeted unit
+  tests to the rewrite.
 
 ## bash-guard
 
@@ -62,9 +53,11 @@ grouped by hook, then by severity (highest first).
   was incorrect. Adding 3-layer loading is a code change to `hook.sh`
   and is deferred until the C# daemon rewrite consolidates config
   loading across hooks (see `task-14-daemon-requirements-2026-05-15.md`).
-- [ ] **`COMMAND_NORM` / `COMMAND_FLAT` normalisation lacks unit
-  tests.** Pass-2 added jailbreak probes; the normalisation functions
-  themselves are not directly tested.
+- **(deferred to daemon rewrite) `COMMAND_NORM` / `COMMAND_FLAT`
+  normalisation lacks unit tests in isolation.** Pass-2 added jailbreak
+  probes; the normalisation functions themselves are not directly
+  tested. Same rationale as the path-guard equivalent above — defer to
+  the C# daemon rewrite.
 - **(intentional non-block) `rm` of `~/.claude/projects/*/memory/*.md`.**
   Agent memory files sit inside path-guard's allowed zone (`~/.claude`)
   and aren't covered by any `[secret]`/`[protected]` pattern; bash-guard's
@@ -84,7 +77,4 @@ grouped by hook, then by severity (highest first).
 
 ## Cross-cutting
 
-- [ ] **No top-level test runner.** Each hook's `test.sh` is invoked
-  independently. There is no `hooks/test-all.sh` (or equivalent) that
-  runs every hook's suite in sequence and reports a combined result.
-  Hard to verify the whole suite before a `git push`.
+(no open items)

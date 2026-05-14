@@ -495,6 +495,82 @@ else
 fi
 rm -rf "$LOG_PROJ"; rm -f "$LOG_RESULT_FILE" "$LOG_STDERR"
 
+# --- Fail-open: missing jq + invalid ERE ---------------------------------
+# Two runtime safety knobs that previously aborted the hook hard under
+# `set -euo pipefail`:
+#   1. `jq` missing from PATH → hook should warn and exit 0 (the harness
+#      then falls back to a permission prompt), not block the call.
+#   2. A malformed POSIX ERE pattern in any config layer → hook should
+#      skip the bad pattern with a warning, not abort the whole script.
+echo
+echo "--- Fail-open: missing jq + invalid ERE ---"
+
+# jq missing: empty PATH (just a temp dir with no binaries) so command -v jq
+# fails. Hook should warn on stderr and exit 0 with no decision.
+EMPTY_DIR=$(mktemp -d)
+JQ_MISSING_OUT_FILE=$(mktemp); JQ_MISSING_ERR_FILE=$(mktemp)
+# Need to find a bash binary first so we can run the hook itself.
+BASH_BIN="$(command -v bash)"
+echo '{"tool_name":"Bash","tool_input":{"command":"anything"}}' \
+  | PATH="$EMPTY_DIR" HOME="$(mktemp -d)" CLAUDE_PROJECT_DIR="$(mktemp -d)" \
+    ALWAYS_ALLOW_HOOK_DIR="$(mktemp -d)" \
+    "$BASH_BIN" "$HOOK" >"$JQ_MISSING_OUT_FILE" 2>"$JQ_MISSING_ERR_FILE" || true
+JQ_OUT=$(cat "$JQ_MISSING_OUT_FILE"); JQ_ERR=$(cat "$JQ_MISSING_ERR_FILE")
+if [ -z "$JQ_OUT" ] && [[ "$JQ_ERR" == *"jq not found"* ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: jq missing → fail-open with warning"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: jq missing (stdout='$JQ_OUT' stderr='$JQ_ERR')"
+fi
+rm -rf "$EMPTY_DIR"; rm -f "$JQ_MISSING_OUT_FILE" "$JQ_MISSING_ERR_FILE"
+
+# Invalid ERE in default layer: malformed pattern (unclosed char class) plus
+# a valid pattern. Hook should skip the bad one with a warning and still
+# match the valid one.
+run_isolated "" "good-cmd" false "" $'[allow]\n[unclosed\n^good-cmd$'
+if [ "$HOOK_RC" -eq 0 ] \
+   && [ "$HOOK_STDOUT" = '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}' ] \
+   && [[ "$HOOK_STDERR" == *"invalid ERE"* ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: invalid ERE in default → skipped with warning; later valid pattern still matches"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: invalid ERE in default (rc=$HOOK_RC stdout='$HOOK_STDOUT' stderr='$HOOK_STDERR')"
+fi
+
+# Invalid ERE in user layer.
+run_isolated "" "user-good" false $'[allow]\n[(unclosed)\n^user-good$' ""
+if [ "$HOOK_RC" -eq 0 ] \
+   && [ "$HOOK_STDOUT" = '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}' ] \
+   && [[ "$HOOK_STDERR" == *"invalid ERE"* ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: invalid ERE in user → skipped; valid pattern still matches"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: invalid ERE in user (rc=$HOOK_RC stdout='$HOOK_STDOUT' stderr='$HOOK_STDERR')"
+fi
+
+# Invalid ERE in project layer.
+run_isolated $'[allow]\n*(broken\n^proj-good$' "proj-good"
+if [ "$HOOK_RC" -eq 0 ] \
+   && [ "$HOOK_STDOUT" = '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}' ] \
+   && [[ "$HOOK_STDERR" == *"invalid ERE"* ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: invalid ERE in project → skipped; valid pattern still matches"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: invalid ERE in project (rc=$HOOK_RC stdout='$HOOK_STDOUT' stderr='$HOOK_STDERR')"
+fi
+
+# All-invalid config: no valid patterns at all; hook exits cleanly with no
+# decision (pass-through). Stderr should contain the warning for each.
+run_isolated $'[allow]\n[only-broken\n*(also-broken' "any-command"
+if [ "$HOOK_RC" -eq 0 ] \
+   && [ -z "$HOOK_STDOUT" ] \
+   && [[ "$HOOK_STDERR" == *"invalid ERE"* ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: all-invalid config → silent pass-through with warnings"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: all-invalid config (rc=$HOOK_RC stdout='$HOOK_STDOUT' stderr='$HOOK_STDERR')"
+fi
+
 # --- Real project patterns (sanity check) ---------------------------------
 # These mirror what the project's own .always-allow contains, but use the
 # isolated fixture so they're independent of the caller's directory.
