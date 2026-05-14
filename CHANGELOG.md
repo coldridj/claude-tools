@@ -76,6 +76,30 @@ record of what was resolved.
   symlink, and a zone-violation symlink. Closes the BUGS.md
   "symlink resolution not exercised end-to-end" gap.
 
+### Security
+
+- **`hooks/always-allow/test-jailbreak.sh`: 51-probe adversarial sweep.**
+  Pass-4 hardening pass on always-allow. Probes cover nine bypass
+  classes: filter-segment redirects, absolute-path filter binaries,
+  `$VAR` / `$()` / backtick in filter binaries, non-whitelist filters
+  (`tee`/`sponge`/`sed -i`/`awk -i inplace`/`cat`), quoted filter
+  binaries, multi-command in filter segments, multi-command guards
+  (`&&` / `||` / `;` / newline / `|&`), substring evasion of the base
+  command (`b\ash`, `"bash"`, `b""ash`, leading whitespace, tab), and
+  command-substitution / brace-expansion wrapping the base. Plus
+  parser edge cases: `[allow]` rejects bg, unknown sections silently
+  drop patterns, the `[xyz]` mis-parse, section-context-doesn't-leak-
+  across-files, Read-tool inputs always pass through. Known
+  limitations probed as `allow` with `KNOWN LIMITATION` markers:
+  `$VAR` / `$(…)` / backtick in argv position, unanchored patterns,
+  embedded-newline pattern lines. All 51 probes hold. Test.sh chains
+  into the jailbreak file at the end.
+- **`hooks/always-allow/HARDENING.md`: pass-4 documentation.** Marks
+  the two previously-open hardening items (invalid ERE + missing
+  `jq`) as CLOSED with the pass-3 fixes from earlier this commit. Adds
+  an "Adversarial probe sweep — 2026-05-15" section summarising the
+  nine bypass classes and the known limitations.
+
 ### Documentation
 
 - **`BUGS.md`: cleaned up resolved entries** and corrected the cross-
