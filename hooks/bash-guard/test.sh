@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-HOOK="$SCRIPT_DIR/hook.sh"
+HOOK="${1:-$SCRIPT_DIR/hook.sh}"
 PASS=0
 FAIL=0
 
@@ -1083,6 +1083,42 @@ assert_blocked "gh api put ruleset" "gh api -X PUT repos/owner/repo/rulesets/789
 assert_allowed "gh api get protection" "gh api repos/owner/repo/branches/main/protection"
 assert_allowed "gh api list rulesets" "gh api repos/owner/repo/rulesets"
 assert_allowed "gh api create issue" "gh api repos/owner/repo/issues -X POST -f title=bug"
+
+echo ""
+echo "--- Repeat-suppression on block() (CLAUDE_SESSION_SCRATCH set) ---"
+# After the first block per session, the 3-line "Do not retry / hardening pass /
+# If the operation is needed" boilerplate is suppressed. Marker lives in
+# $CLAUDE_SESSION_SCRATCH/.bash-guard-seen. Without CLAUDE_SESSION_SCRATCH set,
+# all assert_blocked above already exercised the full message.
+
+REP_TMP=$(mktemp -d)
+
+# First block: expect full 3-line boilerplate + marker file created.
+FIRST_INPUT=$(jq -cn --arg cmd "sudo rm /etc/shadow" '{"tool_name":"Bash","tool_input":{"command":$cmd}}')
+FIRST_ERR=$(printf '%s' "$FIRST_INPUT" \
+  | CLAUDE_SESSION_SCRATCH="$REP_TMP" bash "$HOOK" 2>&1 >/dev/null || true)
+if echo "$FIRST_ERR" | grep -q "Do not retry with an equivalent command" \
+&& echo "$FIRST_ERR" | grep -q "hardening pass" \
+&& [ -f "$REP_TMP/.bash-guard-seen" ]; then
+  PASS=$((PASS+1)); echo "  PASS: first block: full boilerplate + .bash-guard-seen marker created"
+else
+  FAIL=$((FAIL+1)); echo "  FAIL: first block: full boilerplate + marker (err='$FIRST_ERR'; marker=$([ -f "$REP_TMP/.bash-guard-seen" ] && echo yes || echo no))"
+fi
+
+# Second block: expect no "Do not retry" / "hardening pass" / "If the operation"
+# trio (header + Override only).
+SECOND_INPUT=$(jq -cn --arg cmd "sudo apt-get install foo" '{"tool_name":"Bash","tool_input":{"command":$cmd}}')
+SECOND_ERR=$(printf '%s' "$SECOND_INPUT" \
+  | CLAUDE_SESSION_SCRATCH="$REP_TMP" bash "$HOOK" 2>&1 >/dev/null || true)
+if echo "$SECOND_ERR" | grep -q "bash-guard:" \
+&& ! echo "$SECOND_ERR" | grep -q "Do not retry with an equivalent command" \
+&& ! echo "$SECOND_ERR" | grep -q "hardening pass"; then
+  PASS=$((PASS+1)); echo "  PASS: second block: boilerplate trio suppressed"
+else
+  FAIL=$((FAIL+1)); echo "  FAIL: second block: boilerplate suppressed (err='$SECOND_ERR')"
+fi
+
+rm -rf "$REP_TMP"
 
 echo ""
 echo "================================"

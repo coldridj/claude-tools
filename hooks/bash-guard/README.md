@@ -83,6 +83,10 @@ Available allow keys: `rm -rf`, `chmod -R`, `chown -R`, `pipe-to-shell`, `sudo`,
 export BASH_GUARD_DISABLED=1
 ```
 
+## Repeat-suppressed block messages
+
+The "Do not retry / hardening pass / If the operation is needed" boilerplate trio at the end of each block message is constant across rules. After the first block per session, the trio is suppressed — the per-rule reason / suggestion / `Override:` lines still emit, but the three-line footer is skipped to avoid re-billing as input on every later conversation turn. Implemented via a `$CLAUDE_SESSION_SCRATCH/.bash-guard-seen` marker; the squelch only activates when `CLAUDE_SESSION_SCRATCH` is set in the environment, so unit tests (which don't export it) always exercise the full message.
+
 ## Compound command evaluation
 
 Claude Code's built-in deny rules evaluate commands as whole strings. When a dangerous command appears in a pipe chain, after `xargs`, or in a compound statement, the deny rule does not fire ([#41559](https://github.com/anthropics/claude-code/issues/41559), [#37621](https://github.com/anthropics/claude-code/issues/37621), [#37662](https://github.com/anthropics/claude-code/issues/37662)):

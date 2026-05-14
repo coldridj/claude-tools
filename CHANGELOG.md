@@ -19,8 +19,41 @@ record of what was resolved.
 
 ## 2026-05-14
 
+### Fixed
+
+- **`hooks/always-allow/hook.sh`: emit the correct PreToolUse output schema.**
+  The hook was printing `{"decision": "allow"}` which is the legacy form
+  accepted only for `UserPromptSubmit` / `PostToolUse` / `Stop` / etc. —
+  for `PreToolUse`, Claude Code requires the decision nested inside
+  `hookSpecificOutput.permissionDecision`. Under strict schema validation
+  the legacy form failed with `Hook JSON output validation failed —
+  (root): Invalid input`, blocking the affected Bash invocation. Now
+  emits `{"hookSpecificOutput":{"hookEventName":"PreToolUse",
+  "permissionDecision":"allow"}}`. Tests updated; full suite still
+  87/87.
+
 ### Changed
 
+- **`hooks/bash-guard/hook.sh`: block-message boilerplate trio collapses
+  after first occurrence per session.** The "Do not retry / hardening
+  pass / If the operation is needed" three-line footer is constant and
+  re-billed as input on every later turn until compaction. After the
+  first block per session, the trio is skipped; the per-rule reason +
+  suggestion + override stay (they vary per rule). Marker:
+  `$CLAUDE_SESSION_SCRATCH/.bash-guard-seen`. Same env-var gate as
+  path-guard's squelch — tests don't set it, so the full message is
+  exercised by existing assertions. Two new probes pin the suppressed
+  form.
+- **`hooks/path-guard/hook.sh`: write-block messages now collapse after
+  first occurrence per session.** The full scratch+mv workflow used to be
+  printed on every write-block; on long sessions that meant the same
+  ~400-char block re-billed as input on every later turn until
+  compaction. After the first block, a marker
+  (`$CLAUDE_SESSION_SCRATCH/.path-guard-seen`) is touched; subsequent
+  blocks emit just the one-line header plus a pointer to the earlier
+  full message. Squelch only fires when `CLAUDE_SESSION_SCRATCH` is set,
+  so the existing unit tests (which don't export it) still exercise the
+  full-message path. Two new probes added covering the suppressed form.
 - **`hooks/always-allow/hook.sh`: safe trailing pipes are now auto-allowed.**
   The hook used to refuse any command containing `|`, so every
   allowlisted invocation that ended with `2>&1 | tail -20` had to go

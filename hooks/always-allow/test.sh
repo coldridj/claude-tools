@@ -96,7 +96,8 @@ run_raw() {
 
 assert_allow() {
   local desc="$1"
-  if [ "$HOOK_RC" -eq 0 ] && [ "$HOOK_STDOUT" = '{"decision": "allow"}' ] && [ -z "$HOOK_STDERR" ]; then
+  local expected='{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}'
+  if [ "$HOOK_RC" -eq 0 ] && [ "$HOOK_STDOUT" = "$expected" ] && [ -z "$HOOK_STDERR" ]; then
     PASS=$((PASS + 1)); echo "  PASS: $desc"
   else
     FAIL=$((FAIL + 1))
@@ -251,7 +252,8 @@ fi
 input=$(make_input "bash scripts/test.sh | tail" false)
 got=$(echo "$input" | HOME="$home_dir" CLAUDE_PROJECT_DIR="$proj" ALWAYS_ALLOW_HOOK_DIR="$hook_dir" \
   ALWAYS_ALLOW_SAFE_PIPE_FILTERS="tail wc" bash "$HOOK" 2>/dev/null || true)
-if [ "$got" = '{"decision": "allow"}' ]; then
+expected='{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}'
+if [ "$got" = "$expected" ]; then
   PASS=$((PASS+1)); echo "  PASS: env override keeps tail in whitelist"
 else
   FAIL=$((FAIL+1)); echo "  FAIL: env override keeps tail (got '$got')"
@@ -466,7 +468,7 @@ RESULT=$(echo "$(make_input "override-test" false)" \
     HOME="$(mktemp -d)" \
     CLAUDE_PROJECT_DIR="$(mktemp -d)" \
     bash "$HOOK" 2>&1) || true
-if [ "$RESULT" = '{"decision": "allow"}' ]; then
+if [ "$RESULT" = '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}' ]; then
   PASS=$((PASS + 1)); echo "  PASS: ALWAYS_ALLOW_HOOK_DIR override loads custom default"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: ALWAYS_ALLOW_HOOK_DIR override (got: $RESULT)"
@@ -486,7 +488,7 @@ echo "$(make_input "logme" false)" \
     bash "$HOOK" >"$LOG_RESULT_FILE" 2>"$LOG_STDERR" || true
 LOG_STDOUT=$(cat "$LOG_RESULT_FILE")
 LOG_STDERR_C=$(cat "$LOG_STDERR")
-if [ "$LOG_STDOUT" = '{"decision": "allow"}' ] && [[ "$LOG_STDERR_C" == *"[always-allow]"* ]]; then
+if [ "$LOG_STDOUT" = '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}' ] && [[ "$LOG_STDERR_C" == *"[always-allow]"* ]]; then
   PASS=$((PASS + 1)); echo "  PASS: ALWAYS_ALLOW_LOG=1 writes diagnostics, decision unchanged"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: ALWAYS_ALLOW_LOG=1 (stdout='$LOG_STDOUT' stderr='$LOG_STDERR_C')"

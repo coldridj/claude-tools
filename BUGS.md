@@ -65,6 +65,18 @@ grouped by hook, then by severity (highest first).
 - [ ] **`COMMAND_NORM` / `COMMAND_FLAT` normalisation lacks unit
   tests.** Pass-2 added jailbreak probes; the normalisation functions
   themselves are not directly tested.
+- **(intentional non-block) `rm` of `~/.claude/projects/*/memory/*.md`.**
+  Agent memory files sit inside path-guard's allowed zone (`~/.claude`)
+  and aren't covered by any `[secret]`/`[protected]` pattern; bash-guard's
+  critical-path `rm` rule also requires recursive+force flags, so plain
+  `rm <memory-file>` falls through unblocked. This is *deliberate*:
+  CLAUDE.md memory guidance instructs the agent to "update or remove
+  memories that turn out to be wrong or outdated", so deletion is a
+  normal operation. Adding `[protected]` for the memory tree would force
+  scratch+mv on every memory update; a narrow bash-guard rule for `rm`
+  specifically was considered and rejected (2026-05-14 audit). If a
+  future incident shows the assumption wrong, the rejected rule from
+  the audit is the easy first step.
 
 ## read-guard
 

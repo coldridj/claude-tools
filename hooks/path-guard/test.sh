@@ -339,6 +339,40 @@ expect_block "rm -rf .git/objects (legit, dir-prefix tree match)" \
 expect_block "find -delete inside .claude (legit, tree)" \
   '{"tool_name":"Bash","tool_input":{"command":"find /test/project/.claude -name '\''*.json'\'' -delete"}}'
 
+echo "=== Repeat-suppression on block_write (CLAUDE_SESSION_SCRATCH set) ==="
+# When CLAUDE_SESSION_SCRATCH points at a real dir, the first write-block emits
+# the full scratch+mv workflow and touches a marker file; subsequent blocks
+# emit a one-liner pointing back. Tests that don't set the env always see the
+# full message (above), so this section pins the optional shorter form.
+
+REP_TMP=$(mktemp -d)
+REP_INPUT='{"tool_name":"Edit","tool_input":{"file_path":"/test/project/.claude/settings.json","old_string":"a","new_string":"b"}}'
+
+FIRST_ERR=$(printf '%s' "$REP_INPUT" | \
+  PATH_GUARD_HOOK_DIR="$HOOK_DIR" \
+  CLAUDE_PROJECT_DIR="$CLAUDE_PROJECT_DIR" \
+  CLAUDE_SESSION_SCRATCH="$REP_TMP" \
+  bash "$HOOK" 2>&1 >/dev/null || true)
+if echo "$FIRST_ERR" | grep -q "To proceed: write to" && [ -f "$REP_TMP/.path-guard-seen" ]; then
+  ok "first block: full workflow message + .path-guard-seen marker created"
+else
+  fail "first block: full workflow message + marker (err='$FIRST_ERR'; marker=$([ -f "$REP_TMP/.path-guard-seen" ] && echo yes || echo no))"
+fi
+
+SECOND_ERR=$(printf '%s' "$REP_INPUT" | \
+  PATH_GUARD_HOOK_DIR="$HOOK_DIR" \
+  CLAUDE_PROJECT_DIR="$CLAUDE_PROJECT_DIR" \
+  CLAUDE_SESSION_SCRATCH="$REP_TMP" \
+  bash "$HOOK" 2>&1 >/dev/null || true)
+if echo "$SECOND_ERR" | grep -q "See earlier path-guard message" \
+&& ! echo "$SECOND_ERR" | grep -q "To proceed:"; then
+  ok "second block: short message points back at earlier guidance"
+else
+  fail "second block: short message (err='$SECOND_ERR')"
+fi
+
+rm -rf "$REP_TMP"
+
 echo ""
 if [ "$FAILURES" -ne 0 ]; then
   echo "$FAILURES test.sh case(s) failed." >&2

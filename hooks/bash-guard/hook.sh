@@ -76,14 +76,19 @@
 #   bash-guard: <reason>
 #   Suggestion: <safer alternative>           (omitted if no suggestion)
 #   Override: add 'allow: <key>' to .bash-guard.   (omitted if no key)
-#   Do not retry with an equivalent command (...).
-#   The hardening pass covers common workarounds; chasing them just produces a longer block trail.
-#   If the operation is needed, add the allow above or ask the user to run it.
+#   Do not retry with an equivalent command (...).            \
+#   The hardening pass covers common workarounds ...           > 3-line boilerplate, suppressed
+#   If the operation is needed, add the allow above ...       /   after first block per session
 #
 # Per-rule call sites pass the allow key in their suggestion text (e.g.
 # ", or add 'allow: <key>' to .bash-guard."). The block() function extracts
 # the key automatically and strips the redundant suffix from the suggestion
 # so the Override: line is the only place it appears in the output.
+#
+# Repeat-suppression: the 3-line boilerplate trio after the override line
+# would re-bill on every later turn until compaction. After the first block
+# per session, it is skipped. Marker file lives in CLAUDE_SESSION_SCRATCH;
+# unit tests don't export the env var so they always see the full message.
 
 set -euo pipefail
 
@@ -190,9 +195,22 @@ block() {
   printf 'bash-guard: %s\n' "$reason" >&2
   [ -n "$suggestion" ] && printf 'Suggestion: %s\n' "$suggestion" >&2
   [ -n "$allow_key" ] && printf "Override: add 'allow: %s' to .bash-guard.\n" "$allow_key" >&2
-  printf 'Do not retry with an equivalent command (shred for rm, nc for curl, bash <<< for bash -c).\n' >&2
-  printf 'The hardening pass covers common workarounds; chasing them just produces a longer block trail.\n' >&2
-  printf 'If the operation is needed, add the allow above or ask the user to run it.\n' >&2
+
+  # Repeat-suppression: the boilerplate "Do not retry / hardening pass / If
+  # the operation is needed" trio re-bills as input on every later turn until
+  # compaction. After the first block per session, skip it. Marker file lives
+  # in CLAUDE_SESSION_SCRATCH; unit tests don't export the env var so they
+  # always exercise the full-message form.
+  local seen_file=""
+  if [ -n "${CLAUDE_SESSION_SCRATCH:-}" ]; then
+    seen_file="$CLAUDE_SESSION_SCRATCH/.bash-guard-seen"
+  fi
+  if [ -z "$seen_file" ] || [ ! -f "$seen_file" ]; then
+    printf 'Do not retry with an equivalent command (shred for rm, nc for curl, bash <<< for bash -c).\n' >&2
+    printf 'The hardening pass covers common workarounds; chasing them just produces a longer block trail.\n' >&2
+    printf 'If the operation is needed, add the allow above or ask the user to run it.\n' >&2
+    [ -n "$seen_file" ] && touch "$seen_file" 2>/dev/null
+  fi
   exit 2
 }
 

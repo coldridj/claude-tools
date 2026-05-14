@@ -43,6 +43,14 @@ final `Do not retry.`. If the target is executable, an extra
 `chmod +x` line is appended. The same workflow applies to any
 shell-driven write the backstop refuses.
 
+**Repeat-suppression.** After the first write-block per session, subsequent
+blocks emit just the one-line header plus `(See earlier path-guard
+message …)` — the full scratch+mv workflow would re-bill on every later
+turn until conversation compaction. Implemented via a
+`$CLAUDE_SESSION_SCRATCH/.path-guard-seen` marker; only active when
+`CLAUDE_SESSION_SCRATCH` is set in the environment, so unit tests (which
+don't export it) always exercise the full message form.
+
 ## Configuration
 
 Layered files, all concatenated:

@@ -1,6 +1,10 @@
 #!/bin/bash
-# always-allow: PreToolUse hook — emits {"decision": "allow"} for Bash commands
-# matching a configured regex allowlist, suppressing the permission prompt.
+# always-allow: PreToolUse hook — emits a `permissionDecision: allow` for Bash
+# commands matching a configured regex allowlist, suppressing the prompt.
+#
+# Hook output format: Claude Code's PreToolUse schema requires the decision
+# to live inside `hookSpecificOutput` (the top-level `{"decision":"allow"}`
+# legacy form is rejected with "Hook JSON output validation failed").
 #
 # Config files (concatenated, in load order):
 #   1. .claude/hooks/always-allow/default.always-allow  (shipped with the hook)
@@ -60,6 +64,14 @@ log() {
   if [ "${ALWAYS_ALLOW_LOG:-0}" = "1" ]; then
     echo "[always-allow] $*" >&2
   fi
+}
+
+# Emit the PreToolUse allow decision in Claude Code's required schema.
+# Top-level `{"decision":"allow"}` is invalid for PreToolUse — that form is
+# only accepted for UserPromptSubmit / PostToolUse / Stop / etc. PreToolUse
+# requires the decision nested inside `hookSpecificOutput`.
+emit_allow() {
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}'
 }
 
 # Never auto-allow commands that chain via &&, ||, ;, or span multiple lines.
@@ -186,7 +198,7 @@ if [ "$RUN_IN_BG" = "true" ]; then
   # Background commands: only [background] patterns may auto-allow.
   if matches "$BASE_CMD" BG_ALLOWED; then
     log "ALLOWED (background) by config: $COMMAND"
-    printf '%s\n' '{"decision": "allow"}'
+    emit_allow
   else
     log "DENIED background command (no [background] match): $COMMAND"
   fi
@@ -194,7 +206,7 @@ else
   # Foreground commands: either section may auto-allow.
   if matches "$BASE_CMD" ALLOWED || matches "$BASE_CMD" BG_ALLOWED; then
     log "ALLOWED by config: $COMMAND"
-    printf '%s\n' '{"decision": "allow"}'
+    emit_allow
   fi
 fi
 

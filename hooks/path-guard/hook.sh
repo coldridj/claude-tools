@@ -48,6 +48,12 @@
 #     basename patterns like `.git` don't match inside `origin.git`,
 #     `.claude` doesn't match inside `myclaude/...`, etc.
 #
+# Repeat-suppression: after the first write-block per session, subsequent
+# blocks emit a short one-liner instead of the full scratch+mv workflow,
+# saving tokens. Implemented via a `$CLAUDE_SESSION_SCRATCH/.path-guard-seen`
+# marker file. Only active when CLAUDE_SESSION_SCRATCH is set — unit tests
+# don't export it, so the full message is always tested.
+#
 # Known limitations (covered by bash-guard or out-of-scope):
 #   - $VAR / $(cmd) redirect targets cannot be analysed statically.
 #   - Relative redirect/tee targets above the project root (../../etc/x) are not
@@ -390,6 +396,21 @@ block_zone() {
 
 block_write() {
   local target="$1" reason="$2"
+
+  # Repeat-suppression: after the first write-block per session, emit only the
+  # one-liner header so the verbose scratch+mv workflow doesn't re-bill on
+  # every later turn. The marker file lives in CLAUDE_SESSION_SCRATCH; tests
+  # don't export it, so they always see the full message.
+  local seen_file=""
+  if [ -n "${CLAUDE_SESSION_SCRATCH:-}" ]; then
+    seen_file="$CLAUDE_SESSION_SCRATCH/.path-guard-seen"
+    if [ -f "$seen_file" ]; then
+      printf 'path-guard: cannot write "%s" — %s\n' "$target" "$reason" >&2
+      printf '(See earlier path-guard message this session for the scratch+mv workflow.)\n' >&2
+      exit 2
+    fi
+  fi
+
   local scratch="${CLAUDE_SESSION_SCRATCH:-$PROJECT_DIR/${CLAUDE_SCRATCH_ROOT:-.scratch}}"
   # Repo-relative form of the scratch dir for the user-runnable mv command.
   # CLAUDE_SESSION_SCRATCH is only exported inside Claude's bash subprocess,
@@ -413,6 +434,10 @@ block_write() {
     printf 'Target is executable: also ask: chmod +x <target> (Write creates 0644).\n' >&2
   fi
   printf 'Do not retry.\n' >&2
+
+  # Mark first-seen so the next block in this session takes the short path.
+  [ -n "$seen_file" ] && touch "$seen_file" 2>/dev/null
+
   exit 2
 }
 
