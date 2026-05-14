@@ -19,6 +19,25 @@ record of what was resolved.
 
 ## 2026-05-14
 
+### Changed
+
+- **`hooks/always-allow/hook.sh`: safe trailing pipes are now auto-allowed.**
+  The hook used to refuse any command containing `|`, so every
+  allowlisted invocation that ended with `2>&1 | tail -20` had to go
+  through the permission prompt. The pipe operator is now split out from
+  the multi-command guard: `&&`, `||`, `;`, newline still always block,
+  but `|` is allowed when every downstream segment is a "safe pipe
+  filter" — first token from a hardcoded whitelist of read-only
+  stdin→stdout binaries (`head`, `tail`, `wc`, `tr`, `cut`, `sort`,
+  `uniq`, `nl`, `rev`, `fold`, `column`, `jq`, `yq`, `grep`, `egrep`,
+  `fgrep`, `rg`) and no `>` / `>>` redirect inside the segment.
+  `tee` / `sponge` / `sed -i` / `awk -i inplace` are deliberately
+  excluded — zone enforcement on those is path-guard's job. The
+  whitelist is overridable for tests via
+  `ALWAYS_ALLOW_SAFE_PIPE_FILTERS=<names>`. Thirteen new probes added to
+  `hooks/always-allow/test.sh`. `test.sh` now also accepts an optional
+  `$1` hook-path arg, matching path-guard's invocation style.
+
 ### Fixed
 
 - **`hooks/path-guard/hook.sh`: Bash-backstop substring false positives.**

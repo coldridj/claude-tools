@@ -9,7 +9,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-HOOK="$SCRIPT_DIR/hook.sh"
+HOOK="${1:-$SCRIPT_DIR/hook.sh}"
 PASS=0
 FAIL=0
 
@@ -183,7 +183,7 @@ ALLOW_FOO=$'[background]\n^foo'
 run_isolated "$ALLOW_FOO" "foo && bar"
 assert_pass_through "AND chain rejected even with [background] match"
 run_isolated "$ALLOW_FOO" "foo | tee log"
-assert_pass_through "pipe rejected"
+assert_pass_through "pipe to tee rejected (tee writes a file)"
 run_isolated "$ALLOW_FOO" "foo; bar"
 assert_pass_through "semicolon rejected"
 run_isolated "$ALLOW_FOO" "foo || bar"
@@ -194,6 +194,69 @@ run_isolated "$ALLOW_FOO" $'foo arg\nrm -rf /'
 assert_pass_through "newline with dangerous suffix rejected"
 run_isolated "$ALLOW_FOO" "foo && bar" true
 assert_pass_through "multi-command rejected even with [background] match in bg"
+
+# --- Safe pipe filters ----------------------------------------------------
+# An allowlisted base command may be followed by one or more pipe segments
+# IF each segment is a known read-only stdin→stdout filter with no redirect.
+# `tee`, `sponge`, `sed -i`, `awk -i inplace` write files and stay excluded.
+echo
+echo "--- Safe pipe filters ---"
+ALLOW_TEST=$'[allow]\n^(bash )?scripts/test\\.sh($|[[:space:]])'
+
+run_isolated "$ALLOW_TEST" "bash scripts/test.sh | tail -20"
+assert_allow "allowed base | tail -20"
+
+run_isolated "$ALLOW_TEST" "bash scripts/test.sh 2>&1 | tail -20"
+assert_allow "allowed base 2>&1 | tail -20 (stderr redirect on base)"
+
+run_isolated "$ALLOW_TEST" "bash scripts/test.sh | head"
+assert_allow "allowed base | head"
+
+run_isolated "$ALLOW_TEST" "bash scripts/test.sh | grep foo | wc -l"
+assert_allow "allowed base | grep | wc (chained safe filters)"
+
+run_isolated "$ALLOW_TEST" "bash scripts/test.sh | jq ."
+assert_allow "allowed base | jq ."
+
+run_isolated "$ALLOW_TEST" "bash scripts/test.sh | sed -i s/x/y/ a"
+assert_pass_through "sed not in safe filter list (can write with -i)"
+
+run_isolated "$ALLOW_TEST" "bash scripts/test.sh | awk -i inplace 1 a"
+assert_pass_through "awk not in safe filter list"
+
+run_isolated "$ALLOW_TEST" "bash scripts/test.sh | tail > /tmp/out"
+assert_pass_through "redirect on filter segment rejected"
+
+run_isolated "$ALLOW_TEST" "bash scripts/test.sh | /bin/head"
+assert_pass_through "absolute-path binary in filter rejected"
+
+run_isolated "$ALLOW_TEST" "bash scripts/test.sh | \$EVIL"
+assert_pass_through "\$VAR substitution in filter binary rejected"
+
+run_isolated "$ALLOW_TEST" "bash scripts/unallowed.sh | tail"
+assert_pass_through "unallowed base, safe filter — no allow"
+
+# Custom whitelist via env var (drops the default list).
+proj=$(mktemp -d); home_dir=$(mktemp -d); hook_dir=$(mktemp -d)
+mkdir -p "$home_dir/.claude"
+printf '[allow]\n^(bash )?scripts/test\\.sh($|[[:space:]])\n' > "$proj/.always-allow"
+input=$(make_input "bash scripts/test.sh | head" false)
+got=$(echo "$input" | HOME="$home_dir" CLAUDE_PROJECT_DIR="$proj" ALWAYS_ALLOW_HOOK_DIR="$hook_dir" \
+  ALWAYS_ALLOW_SAFE_PIPE_FILTERS="tail wc" bash "$HOOK" 2>/dev/null || true)
+if [ -z "$got" ]; then
+  PASS=$((PASS+1)); echo "  PASS: env override drops head from whitelist"
+else
+  FAIL=$((FAIL+1)); echo "  FAIL: env override drops head (got '$got')"
+fi
+input=$(make_input "bash scripts/test.sh | tail" false)
+got=$(echo "$input" | HOME="$home_dir" CLAUDE_PROJECT_DIR="$proj" ALWAYS_ALLOW_HOOK_DIR="$hook_dir" \
+  ALWAYS_ALLOW_SAFE_PIPE_FILTERS="tail wc" bash "$HOOK" 2>/dev/null || true)
+if [ "$got" = '{"decision": "allow"}' ]; then
+  PASS=$((PASS+1)); echo "  PASS: env override keeps tail in whitelist"
+else
+  FAIL=$((FAIL+1)); echo "  FAIL: env override keeps tail (got '$got')"
+fi
+rm -rf "$proj" "$home_dir" "$hook_dir"
 
 # --- Section parsing ------------------------------------------------------
 echo
