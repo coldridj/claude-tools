@@ -43,11 +43,6 @@ grouped by hook, then by severity (highest first).
   out of `WRITE_CMDS_RE` and parse their args to identify the final
   positional (the destination). Workarounds for now: rename the
   destination to a non-protected basename, or use `Read` + `Write`.
-- [ ] **Layered config files are not exercised.** Tests load only
-  `default.path-guard`. The user-wide `~/.claude/.path-guard` and the
-  project-local `$CLAUDE_PROJECT_DIR/.path-guard` are documented as
-  concatenated overlays but have no integration test that exercises
-  the load order / merge.
 - [ ] **`COMMAND_NORM` / `COMMAND_FLAT` normalisation lacks unit
   tests.** Pass-6 added end-to-end jailbreak probes for line-
   continuation collapse and quote-stripping but no targeted unit tests
@@ -59,9 +54,14 @@ grouped by hook, then by severity (highest first).
 
 ## bash-guard
 
-- [ ] **Layered config files are not exercised.** Same default-only
-  pattern as path-guard. `$HOME/.claude/.bash-guard` and
-  `$CLAUDE_PROJECT_DIR/.bash-guard` load order / merge are not tested.
+- **(deferred to daemon rewrite) Single-file config model.** bash-guard
+  loads exactly one config from `$BASH_GUARD_CONFIG` (or `.bash-guard`
+  in CWD), unlike path-guard / read-guard / always-allow which all do
+  default + user-wide + project-level layering. Earlier versions of this
+  file claimed bash-guard followed the same three-file pattern — that
+  was incorrect. Adding 3-layer loading is a code change to `hook.sh`
+  and is deferred until the C# daemon rewrite consolidates config
+  loading across hooks (see `task-14-daemon-requirements-2026-05-15.md`).
 - [ ] **`COMMAND_NORM` / `COMMAND_FLAT` normalisation lacks unit
   tests.** Pass-2 added jailbreak probes; the normalisation functions
   themselves are not directly tested.
@@ -80,14 +80,7 @@ grouped by hook, then by severity (highest first).
 
 ## read-guard
 
-- [ ] **Layered config files are not exercised.** Tests temporarily
-  overwrite `$SCRIPT_DIR/default.read-guard` (the shipped file) to
-  inject exclusions; the user-wide `~/.claude/.read-guard` and project
-  `$CLAUDE_PROJECT_DIR/.read-guard` layering is not tested.
-- [ ] **`$CLAUDE_SCRATCH_ROOT/` auto-exemption is not tested
-  explicitly.** The hook auto-exempts whatever `$CLAUDE_SCRATCH_ROOT`
-  resolves to (default `.scratch/`); no test sets the env var to a
-  non-default value and asserts the auto-exemption follows.
+(no open items)
 
 ## Cross-cutting
 
@@ -95,10 +88,3 @@ grouped by hook, then by severity (highest first).
   independently. There is no `hooks/test-all.sh` (or equivalent) that
   runs every hook's suite in sequence and reports a combined result.
   Hard to verify the whole suite before a `git push`.
-- [ ] **Layered-config testing is structurally absent across three
-  hooks** (path-guard, read-guard, bash-guard). All three use the same
-  three-file concatenation pattern; a single shared test harness (or a
-  per-hook `<NAME>_USER_CONFIG` / `<NAME>_PROJECT_CONFIG` env-var
-  override, matching the existing `<NAME>_HOOK_DIR` knob) would close
-  all three gaps at once. always-allow now has layered-config coverage
-  via the `run_isolated` helper — that's the model to copy.

@@ -11,6 +11,9 @@ export CLAUDE_PROJECT_DIR="/test/project"
 # Ensure the hook finds default.path-guard even when invoked from elsewhere.
 export PATH_GUARD_HOOK_DIR="$HOOK_DIR"
 
+# shellcheck disable=SC1091
+. "$HOOK_DIR/../lib/layered-config.sh"
+
 ok()   { printf '\033[32m PASS \033[0m %s\n' "$1"; }
 fail() { printf '\033[31m FAIL \033[0m %s\n' "$1"; FAILURES=$(( FAILURES + 1 )); }
 
@@ -338,6 +341,105 @@ expect_block "rm -rf .git/objects (legit, dir-prefix tree match)" \
 
 expect_block "find -delete inside .claude (legit, tree)" \
   '{"tool_name":"Bash","tool_input":{"command":"find /test/project/.claude -name '\''*.json'\'' -delete"}}'
+
+echo "=== Layered config files (default + user + project) ==="
+# Exercise the three-file concatenation pattern: shipped default + user-wide
+# $HOME/.claude/.path-guard + project $CLAUDE_PROJECT_DIR/.path-guard. The
+# shared layered_run helper writes each layer's contents to a fresh temp dir
+# and runs the hook with the matching env-var overrides.
+
+layered_block() {
+  local label="$1" default_cfg="$2" user_cfg="$3" project_cfg="$4" input="$5"
+  layered_run --hook "$HOOK" --kind path-guard \
+    --default "$default_cfg" --user "$user_cfg" --project "$project_cfg" \
+    --input "$input"
+  if [ "$HOOK_RC" -eq 2 ]; then ok "$label"
+  else fail "$label — expected BLOCK (exit 2), got exit $HOOK_RC (stderr='$HOOK_STDERR')"; fi
+}
+
+layered_allow() {
+  local label="$1" default_cfg="$2" user_cfg="$3" project_cfg="$4" input="$5"
+  layered_run --hook "$HOOK" --kind path-guard \
+    --default "$default_cfg" --user "$user_cfg" --project "$project_cfg" \
+    --input "$input"
+  if [ "$HOOK_RC" -eq 0 ]; then ok "$label"
+  else fail "$label — expected ALLOW (exit 0), got exit $HOOK_RC (stderr='$HOOK_STDERR')"; fi
+}
+
+# All file_path values are relative basenames — the hook prepends
+# $CLAUDE_PROJECT_DIR (a temp dir owned by the helper) so the zone check
+# passes and only the [secret] / [protected] config rules drive the result.
+
+# Default layer [secret] blocks both Read and Write of a matching path.
+layered_block "default [secret]: Read blocked" \
+  $'[secret]\n.layered-def-secret' "" "" \
+  '{"tool_name":"Read","tool_input":{"file_path":".layered-def-secret"}}'
+
+layered_block "default [secret]: Edit blocked" \
+  $'[secret]\n.layered-def-secret' "" "" \
+  '{"tool_name":"Edit","tool_input":{"file_path":".layered-def-secret","old_string":"a","new_string":"b"}}'
+
+# Default layer [protected] blocks Edit only (Read still allowed).
+layered_block "default [protected]: Edit blocked" \
+  $'[protected]\n.layered-def-prot' "" "" \
+  '{"tool_name":"Edit","tool_input":{"file_path":".layered-def-prot","old_string":"a","new_string":"b"}}'
+
+layered_allow "default [protected]: Read allowed" \
+  $'[protected]\n.layered-def-prot' "" "" \
+  '{"tool_name":"Read","tool_input":{"file_path":".layered-def-prot"}}'
+
+# User-wide layer ($HOME/.claude/.path-guard).
+layered_block "user [secret]: Read blocked" \
+  "" $'[secret]\n.layered-user-secret' "" \
+  '{"tool_name":"Read","tool_input":{"file_path":".layered-user-secret"}}'
+
+layered_block "user [protected]: Edit blocked" \
+  "" $'[protected]\n.layered-user-prot' "" \
+  '{"tool_name":"Edit","tool_input":{"file_path":".layered-user-prot","old_string":"a","new_string":"b"}}'
+
+# Project layer ($CLAUDE_PROJECT_DIR/.path-guard).
+layered_block "project [secret]: Read blocked" \
+  "" "" $'[secret]\n.layered-proj-secret' \
+  '{"tool_name":"Read","tool_input":{"file_path":".layered-proj-secret"}}'
+
+layered_block "project [protected]: Edit blocked" \
+  "" "" $'[protected]\n.layered-proj-prot' \
+  '{"tool_name":"Edit","tool_input":{"file_path":".layered-proj-prot","old_string":"a","new_string":"b"}}'
+
+# All three layers loaded simultaneously: each layer's rules are honoured.
+ALL_DEF=$'[secret]\n.three-layer-def-sec'
+ALL_USER=$'[protected]\n.three-layer-user-prot'
+ALL_PROJ=$'[secret]\n.three-layer-proj-sec'
+
+layered_block "three layers: default [secret] active" \
+  "$ALL_DEF" "$ALL_USER" "$ALL_PROJ" \
+  '{"tool_name":"Read","tool_input":{"file_path":".three-layer-def-sec"}}'
+
+layered_block "three layers: user [protected] active" \
+  "$ALL_DEF" "$ALL_USER" "$ALL_PROJ" \
+  '{"tool_name":"Edit","tool_input":{"file_path":".three-layer-user-prot","old_string":"a","new_string":"b"}}'
+
+layered_block "three layers: project [secret] active" \
+  "$ALL_DEF" "$ALL_USER" "$ALL_PROJ" \
+  '{"tool_name":"Read","tool_input":{"file_path":".three-layer-proj-sec"}}'
+
+# Section context does not leak across files: untagged lines (no header) are
+# discarded by path-guard's load_config. A file that starts with a bare
+# pattern (no [secret]/[protected] header) contributes nothing, regardless
+# of which section the prior file ended in.
+layered_allow "section context does not leak: untagged user line ignored" \
+  $'[secret]\n.def-leak-sec' $'.user-no-header' "" \
+  '{"tool_name":"Read","tool_input":{"file_path":".user-no-header"}}'
+
+# But a header in the same file still routes patterns correctly.
+layered_block "section context: user [secret] section routes its patterns" \
+  "" $'[secret]\n.user-with-header' "" \
+  '{"tool_name":"Read","tool_input":{"file_path":".user-with-header"}}'
+
+# Empty layer files load without error and contribute nothing.
+layered_allow "empty default file: nothing blocked" \
+  "" "" "" \
+  '{"tool_name":"Edit","tool_input":{"file_path":".any-relative-file","old_string":"a","new_string":"b"}}'
 
 echo "=== Repeat-suppression on block_write (CLAUDE_SESSION_SCRATCH set) ==="
 # When CLAUDE_SESSION_SCRATCH points at a real dir, the first write-block emits

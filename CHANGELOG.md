@@ -17,6 +17,40 @@ Bug fixes that close a `BUGS.md` entry move out of `BUGS.md` into the
 relevant `Fixed`/`Added` section here, so this file is the authoritative
 record of what was resolved.
 
+## 2026-05-15
+
+### Added
+
+- **`hooks/lib/layered-config.sh`: shared test fixture for the three-file
+  config loading pattern** (default + `$HOME/.claude/.<name>` +
+  `$CLAUDE_PROJECT_DIR/.<name>`). Sourced by per-hook `test.sh` scripts to
+  write each layer into a fresh temp dir and run the hook with the
+  matching env-var overrides (`<NAME>_HOOK_DIR`, `HOME`,
+  `CLAUDE_PROJECT_DIR`). Closes the path-guard and read-guard "layered
+  configs not exercised" gaps from BUGS.md.
+- **`hooks/path-guard/test.sh`: layered-config test section.** 14 new
+  cases covering default-only, user-only, project-only, and all-three-
+  layers loading; [secret] vs [protected] semantics across each layer;
+  section-context-doesn't-leak-across-files. Path-guard test.sh now
+  covers the documented three-file overlay end-to-end.
+- **`hooks/read-guard/test.sh`: layered-config + `CLAUDE_SCRATCH_ROOT`
+  test sections.** 10 new layered-config cases (default / user / project
+  / all-three) plus 4 cases pinning the `$CLAUDE_SCRATCH_ROOT` auto-
+  exemption: default value (`.scratch/`), custom override
+  (`custom-scratch-dir/`), inverse-check that the override displaces the
+  default, and trailing-slash normalisation. Suite expanded from 75 to
+  91/91.
+
+### Documentation
+
+- **`BUGS.md`: cleaned up resolved entries** and corrected the cross-
+  cutting note. bash-guard's "layered configs not exercised" item was
+  based on the false assumption that the hook follows the same three-
+  file pattern as path-guard / read-guard / always-allow. It actually
+  loads a single config from `$BASH_GUARD_CONFIG` (or `.bash-guard` in
+  CWD). Added 3-layer loading is deferred to the C# daemon rewrite
+  (see `.scratch/scripts/task-14-daemon-requirements-2026-05-15.md`).
+
 ## 2026-05-14
 
 ### Fixed

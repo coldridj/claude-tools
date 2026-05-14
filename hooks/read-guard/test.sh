@@ -7,6 +7,9 @@ HOOK="$SCRIPT_DIR/hook.sh"
 PASS=0
 FAIL=0
 
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/../lib/layered-config.sh"
+
 run_hook() {
   local command="$1"
   local stdout_file stderr_file rc
@@ -178,6 +181,116 @@ if [ -n "$CONFIG_BACKUP" ]; then
   CONFIG_BACKUP=""
 fi
 trap - EXIT
+
+echo ""
+echo "--- Layered config files (default + user + project) ---"
+# Each layer points at a separate temp file via env-var overrides
+# (READ_GUARD_HOOK_DIR for the shipped default, HOME for the user-wide
+# .claude/.read-guard, CLAUDE_PROJECT_DIR for the project .read-guard).
+# Closes the BUGS.md gap "Layered config files are not exercised" for
+# read-guard.
+
+read_input_for() {
+  # Build a Bash-tool input JSON for the given command.
+  jq -cn --arg cmd "$1" '{"tool_name":"Bash","tool_input":{"command":$cmd}}'
+}
+
+layered_read_allow() {
+  local label="$1" default_cfg="$2" user_cfg="$3" project_cfg="$4" cmd="$5"
+  layered_run --hook "$HOOK" --kind read-guard \
+    --default "$default_cfg" --user "$user_cfg" --project "$project_cfg" \
+    --input "$(read_input_for "$cmd")"
+  if [ "$HOOK_RC" -eq 0 ] && [ -z "$HOOK_STDOUT" ] && [ -z "$HOOK_STDERR" ]; then
+    PASS=$((PASS + 1)); echo "  PASS: $label"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $label (rc=$HOOK_RC stdout='$HOOK_STDOUT' stderr='$HOOK_STDERR')"
+  fi
+}
+
+layered_read_block() {
+  local label="$1" default_cfg="$2" user_cfg="$3" project_cfg="$4" cmd="$5"
+  layered_run --hook "$HOOK" --kind read-guard \
+    --default "$default_cfg" --user "$user_cfg" --project "$project_cfg" \
+    --input "$(read_input_for "$cmd")"
+  if [ "$HOOK_RC" -eq 2 ] && echo "$HOOK_STDERR" | grep -q 'read-guard:'; then
+    PASS=$((PASS + 1)); echo "  PASS: $label"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $label (rc=$HOOK_RC stdout='$HOOK_STDOUT' stderr='$HOOK_STDERR')"
+  fi
+}
+
+# Default-only: the shipped default.read-guard names a path; commands in that
+# path are exempted.
+layered_read_allow "default-only: exempted path token" \
+  $'def-scratch/' "" "" \
+  "cat def-scratch/foo.txt"
+
+layered_read_block "default-only: non-exempted path blocked" \
+  $'def-scratch/' "" "" \
+  "cat other-dir/foo.txt"
+
+# User-only.
+layered_read_allow "user-only: exempted path token" \
+  "" $'user-area/' "" \
+  "cat user-area/foo.txt"
+
+# Project-only.
+layered_read_allow "project-only: exempted path token" \
+  "" "" $'proj-area/' \
+  "cat proj-area/foo.txt"
+
+# All three layers loaded. Each layer's path token exempts its own commands.
+ALL_DEF=$'def-area/'
+ALL_USER=$'user-area/'
+ALL_PROJ=$'proj-area/'
+
+layered_read_allow "three layers: default exempts def-area/" \
+  "$ALL_DEF" "$ALL_USER" "$ALL_PROJ" "cat def-area/foo.txt"
+
+layered_read_allow "three layers: user exempts user-area/" \
+  "$ALL_DEF" "$ALL_USER" "$ALL_PROJ" "cat user-area/foo.txt"
+
+layered_read_allow "three layers: project exempts proj-area/" \
+  "$ALL_DEF" "$ALL_USER" "$ALL_PROJ" "cat proj-area/foo.txt"
+
+layered_read_block "three layers: unlisted path still blocked" \
+  "$ALL_DEF" "$ALL_USER" "$ALL_PROJ" "cat unrelated/foo.txt"
+
+# Comments and blank lines in any layer load without error.
+layered_read_allow "comments + blank lines in user config" \
+  "" $'# header comment\n\nuser-cmt/\n# trailing comment' "" \
+  "cat user-cmt/x"
+
+# Empty layer files are no-ops.
+layered_read_block "empty layers: nothing exempted" \
+  "" "" "" "cat anywhere/foo.txt"
+
+echo ""
+echo "--- CLAUDE_SCRATCH_ROOT auto-exemption (default + override) ---"
+# The hook auto-adds "${CLAUDE_SCRATCH_ROOT}/" to EXCLUSIONS even when no
+# config file mentions it. Pins both the default value (".scratch") and a
+# custom override.
+
+# Default value: .scratch/ is auto-exempted even with empty configs.
+layered_read_allow "default CLAUDE_SCRATCH_ROOT (.scratch) auto-exempted" \
+  "" "" "" "cat .scratch/foo.txt"
+
+# Custom override via env. Use a subshell so the export does not leak.
+(
+  export CLAUDE_SCRATCH_ROOT="custom-scratch-dir"
+  layered_read_allow "CLAUDE_SCRATCH_ROOT=custom-scratch-dir auto-exempts custom-scratch-dir/" \
+    "" "" "" "cat custom-scratch-dir/foo.txt"
+
+  layered_read_block "CLAUDE_SCRATCH_ROOT=custom-scratch-dir does NOT exempt .scratch/" \
+    "" "" "" "cat .scratch/foo.txt"
+)
+
+# Trailing slash in override is normalised (hook strips trailing /).
+(
+  export CLAUDE_SCRATCH_ROOT="trailing-slash-scratch/"
+  layered_read_allow "CLAUDE_SCRATCH_ROOT with trailing / still exempts" \
+    "" "" "" "cat trailing-slash-scratch/foo.txt"
+)
 
 echo ""
 echo "--- Disabled via env ---"
