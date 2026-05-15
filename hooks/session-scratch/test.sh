@@ -173,6 +173,65 @@ run_hook SessionEnd "sid-301" "CLAUDE_PROJECT_DIR=$PROJ"
   || fail "SessionEnd removes only the named session"
 rm -rf "$PROJ"
 
+# --- Post-mortem logging ----------------------------------------------------
+echo
+echo "--- Post-mortem logging ---"
+
+# SessionStart writes a SessionStart line to .session-events-<utc-date>.jsonl.
+PROJ=$(mktemp -d)
+run_hook SessionStart "sid-700" "CLAUDE_PROJECT_DIR=$PROJ"
+TODAY=$(date -u +%Y-%m-%d)
+LOG="$PROJ/.scratch/.session-events-$TODAY.jsonl"
+[ -f "$LOG" ] && ok "SessionStart creates .session-events-<date>.jsonl" \
+  || fail "SessionStart creates .session-events-<date>.jsonl" "expected $LOG"
+if [ -f "$LOG" ]; then
+  jq -e '.event == "SessionStart" and .session_id == "sid-700"' "$LOG" >/dev/null 2>&1 \
+    && ok "SessionStart log line is valid JSON with event+session_id" \
+    || fail "SessionStart log line shape" "content=$(cat "$LOG")"
+fi
+rm -rf "$PROJ"
+
+# SessionEnd appends a SessionEnd line to the same file.
+PROJ=$(mktemp -d)
+run_hook SessionStart "sid-701" "CLAUDE_PROJECT_DIR=$PROJ"
+run_hook SessionEnd "sid-701" "CLAUDE_PROJECT_DIR=$PROJ"
+TODAY=$(date -u +%Y-%m-%d)
+LOG="$PROJ/.scratch/.session-events-$TODAY.jsonl"
+if [ -f "$LOG" ]; then
+  LINES=$(wc -l < "$LOG")
+  [ "$LINES" -eq 2 ] && ok "SessionEnd appends a second line to the same log" \
+    || fail "SessionEnd appends a second line" "lines=$LINES content=$(cat "$LOG")"
+  jq -e 'select(.event == "SessionEnd") | .session_id == "sid-701"' "$LOG" >/dev/null 2>&1 \
+    && ok "SessionEnd log line has correct event+session_id" \
+    || fail "SessionEnd log line shape" "content=$(cat "$LOG")"
+else
+  fail "SessionEnd log file present" "no $LOG"
+fi
+rm -rf "$PROJ"
+
+# Log file survives across the SessionEnd `rm -rf`: it sits ALONGSIDE the
+# per-session dir, not inside it. After SessionEnd removes sid-702's dir,
+# the log file is still there at depth 1 under SCRATCH_ROOT.
+PROJ=$(mktemp -d)
+run_hook SessionStart "sid-702" "CLAUDE_PROJECT_DIR=$PROJ"
+run_hook SessionEnd "sid-702" "CLAUDE_PROJECT_DIR=$PROJ"
+TODAY=$(date -u +%Y-%m-%d)
+[ ! -e "$PROJ/.scratch/sid-702" ] && [ -f "$PROJ/.scratch/.session-events-$TODAY.jsonl" ] \
+  && ok "Log file survives SessionEnd removal of per-session dir" \
+  || fail "Log file survives SessionEnd"
+rm -rf "$PROJ"
+
+# SessionEnd on a non-existent session does NOT write a log line (the body
+# is gated on dir existence). Avoids polluting the log with no-op events.
+PROJ=$(mktemp -d)
+mkdir -p "$PROJ/.scratch"  # scratch root exists but no per-session dir
+run_hook SessionEnd "sid-never-was" "CLAUDE_PROJECT_DIR=$PROJ"
+TODAY=$(date -u +%Y-%m-%d)
+LOG="$PROJ/.scratch/.session-events-$TODAY.jsonl"
+[ ! -f "$LOG" ] && ok "SessionEnd no-op produces no log line" \
+  || fail "SessionEnd no-op produces no log line" "content=$(cat "$LOG")"
+rm -rf "$PROJ"
+
 # --- Missing fields: silent pass-through ------------------------------------
 echo
 echo "--- Missing fields: silent pass-through ---"

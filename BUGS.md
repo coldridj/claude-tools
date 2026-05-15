@@ -71,6 +71,26 @@ grouped by hook, then by severity (highest first).
   future incident shows the assumption wrong, the rejected rule from
   the audit is the easy first step.
 
+## session-scratch
+
+- **(deferred to daemon rewrite) Shared session_id wipes another live
+  session's scratch.** SessionEnd does `rm -rf $SCRATCH_ROOT/$session_id`
+  unconditionally, assuming `(session_id, time)` is unique. It isn't
+  under `claude --resume`: two terminals re-attaching to the same
+  conversation transcript share a session_id, and closing one wipes the
+  scratch dir the other is still using. The hook's per-session-id
+  isolation test (sibling-session test) passes — the bug only manifests
+  when ids collide via resume.
+
+  Mitigation landed at megarepo TODO: post-mortem JSONL log of every
+  SessionStart/SessionEnd at `.session-events-<utc-date>.jsonl` so the
+  next incident is diagnosable. Structural fix (session-claim file with
+  process tracking, or full daemon ownership of session lifecycle)
+  deferred to the C# daemon — see
+  `task-14-daemon-requirements-2026-05-15.md`. The daemon can track
+  per-process session claims and only clean up when the last process
+  for a given session_id exits.
+
 ## read-guard
 
 (no open items)
