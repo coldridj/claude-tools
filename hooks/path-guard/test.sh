@@ -317,20 +317,24 @@ echo "=== Bash backstop word-boundary regressions ==="
 # `myclaude/...`, etc. The boundary wrap in build_path_regex /
 # build_dir_prefix_regex requires the pattern to be flanked by non-word chars.
 
+# Use in-zone paths so the new Bash command-arg zone check (which blocks
+# writes to /tmp, /var, /opt, etc.) doesn't interfere with the
+# word-boundary intent here. The point is the boundary regex, not zones.
+
 expect_allow "rm + bare-repo init (origin.git is not .git)" \
-  '{"tool_name":"Bash","tool_input":{"command":"rm -rf /var/tmp/sb && mkdir -p /var/tmp/sb && git init --bare /var/tmp/sb/origin.git"}}'
+  '{"tool_name":"Bash","tool_input":{"command":"rm -rf /test/project/var/sb && mkdir -p /test/project/var/sb && git init --bare /test/project/var/sb/origin.git"}}'
 
 expect_allow "cp into foo.git" \
-  '{"tool_name":"Bash","tool_input":{"command":"cp /var/tmp/src.json /var/tmp/foo.git"}}'
+  '{"tool_name":"Bash","tool_input":{"command":"cp /test/project/var/src.json /test/project/var/foo.git"}}'
 
 expect_allow "rm -rf path/origin.git" \
-  '{"tool_name":"Bash","tool_input":{"command":"rm -rf /var/tmp/sandbox/origin.git"}}'
+  '{"tool_name":"Bash","tool_input":{"command":"rm -rf /test/project/var/sandbox/origin.git"}}'
 
 expect_allow ".claude-backup is not .claude" \
-  '{"tool_name":"Bash","tool_input":{"command":"rm -rf /tmp/.claude-backup/file"}}'
+  '{"tool_name":"Bash","tool_input":{"command":"rm -rf /test/project/var/.claude-backup/file"}}'
 
 expect_allow "myclaude/ prefix is not .claude" \
-  '{"tool_name":"Bash","tool_input":{"command":"rm -rf /tmp/myclaude/file"}}'
+  '{"tool_name":"Bash","tool_input":{"command":"rm -rf /test/project/var/myclaude/file"}}'
 
 # And the legitimate matches must still block.
 expect_block "rm -rf /test/project/.git (legit)" \
@@ -385,6 +389,66 @@ expect_block "rm inside subshell targeting protected" \
 
 expect_block "rm inside brace group targeting protected" \
   '{"tool_name":"Bash","tool_input":{"command":"{ rm /test/project/git_modules/claude-tools/scripts/x.sh; }"}}'
+
+echo "=== Bash command-arg zone check (write-intent + path outside zone) ==="
+# Previously: path-guard only zone-checked redirect/tee targets, so
+# `mkdir ~/.local/bin` and `corepack enable --install-directory ~/.local/bin`
+# slipped through despite writing outside $CLAUDE_PROJECT_DIR and ~/.claude.
+# The new WRITE_INTENT_RE gate + extract_command_paths scan closes the gap.
+# Reported repro: mkdir -p ~/.local/bin && corepack enable --install-directory
+# ~/.local/bin 2>&1 && ~/.local/bin/pnpm --version
+
+expect_block "mkdir at top level writing to ~/.local/bin (reported repro)" \
+  '{"tool_name":"Bash","tool_input":{"command":"mkdir -p ~/.local/bin"}}'
+
+expect_block "mkdir writing to /opt/foo (outside zones)" \
+  '{"tool_name":"Bash","tool_input":{"command":"mkdir /opt/foo"}}'
+
+expect_block "corepack --install-directory targeting ~/.local/bin (reported repro)" \
+  '{"tool_name":"Bash","tool_input":{"command":"corepack enable --install-directory ~/.local/bin"}}'
+
+expect_block "&& chain: mkdir + corepack into ~/.local/bin (full reported repro)" \
+  '{"tool_name":"Bash","tool_input":{"command":"mkdir -p ~/.local/bin && corepack enable --install-directory ~/.local/bin 2>&1 && ~/.local/bin/pnpm --version"}}'
+
+expect_block "install -m 755 src targeting /usr/local/bin" \
+  '{"tool_name":"Bash","tool_input":{"command":"install -m 755 /tmp/src /usr/local/bin/foo"}}'
+
+expect_block "rsync into ~/dest (outside zone)" \
+  '{"tool_name":"Bash","tool_input":{"command":"rsync -av /test/project/src ~/dest"}}'
+
+expect_block "--prefix=/opt/local on a make-style command" \
+  '{"tool_name":"Bash","tool_input":{"command":"cargo install --prefix /opt/local --root /opt/local foo"}}'
+
+# Inside-zone targets must still pass.
+
+expect_allow "mkdir under project (in zone)" \
+  '{"tool_name":"Bash","tool_input":{"command":"mkdir -p /test/project/.scratch/subdir"}}'
+
+expect_allow "mkdir under ~/.claude (in zone)" \
+  '{"tool_name":"Bash","tool_input":{"command":"mkdir -p '"$HOME"'/.claude/cache/x"}}'
+
+expect_allow "cp inside project (src and dst both in zone)" \
+  '{"tool_name":"Bash","tool_input":{"command":"cp /test/project/scratch/foo.txt /test/project/data/foo.txt"}}'
+
+# Read-only commands that mention out-of-zone paths must still pass —
+# the zone check is gated on write-intent.
+
+expect_allow "ls /etc (read-only, no write-intent)" \
+  '{"tool_name":"Bash","tool_input":{"command":"ls /etc"}}'
+
+expect_allow "find ~/some-dir (read-only without -delete/-exec)" \
+  '{"tool_name":"Bash","tool_input":{"command":"find ~/some-dir -type f"}}'
+
+expect_allow "execute binary outside zone (~/.local/bin/pnpm --version)" \
+  '{"tool_name":"Bash","tool_input":{"command":"~/.local/bin/pnpm --version"}}'
+
+# Substring false-positive guards (carry-over from STMT_START rule):
+# `bash scripts/install-hooks.sh` must still ALLOW because `install` is
+# inside the filename, not at a statement start. The new zone check
+# inherits the STMT_START anchor so it also doesn't fire on substrings.
+
+expect_allow "bash scripts/install-something.sh (install is a substring of the filename)" \
+  '{"tool_name":"Bash","tool_input":{"command":"bash git_modules/claude-tools/scripts/install-hooks.sh"}}'
 
 echo "=== Layered config files (default + user + project) ==="
 # Exercise the three-file concatenation pattern: shipped default + user-wide

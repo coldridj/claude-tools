@@ -161,6 +161,61 @@ works when the submodule is vendored under a different name (e.g.
 `vendor/foo`). Either layer alone is sufficient; together they survive
 either being missing.
 
+## Pass 8 — zone enforcement on Bash command-arg paths (2026-05-15)
+
+A coverage gap. The documented allowed-roots contract was enforced
+on Edit/Write tool calls (`file_path` zone check) and Bash redirect/
+tee targets (`extract_targets` zone check) but NOT on commands that
+write via a path argument. Reported repro:
+
+```
+mkdir -p ~/.local/bin && corepack enable --install-directory ~/.local/bin
+```
+
+mkdir creates the dir outside the zone; corepack writes pnpm shims
+into it. Neither is a redirect, so neither triggered the existing
+zone check. The agent could quietly modify the user's home dir.
+
+**Closed:**
+
+- New `WRITE_INTENT_RE` (statement-anchored, smaller than
+  `WRITE_CMDS_RE`): matches commands that write via a path argument.
+  Inclusion list focuses on file-/tree-/perm-modifying commands plus
+  `corepack` and the generic `--install-directory` / `--prefix` flags.
+- New `extract_command_paths`: scans the command for tokens that look
+  like filesystem paths (start with `/`, `~/`, or `$HOME/`).
+- When `WRITE_INTENT_RE` matches, every extracted token is resolved
+  via `realpath -m` and zone-checked against
+  `$CLAUDE_PROJECT_DIR` + `$HOME/.claude`. Out-of-zone targets block.
+- `mkdir` added to `WRITE_CMDS_RE` so the existing protected-path
+  backstop also catches it.
+
+**Coverage:**
+
+- 11 new regression tests in test.sh under "Bash command-arg zone
+  check". Both the reported repro forms (mkdir alone, corepack with
+  --install-directory, full && chain) and the adjacent cases
+  (install -m 755 to /usr/local/bin, rsync to ~/dest, --prefix=/opt)
+  block. In-zone forms (mkdir in project, cp inside project) allow.
+  Read-only commands that mention out-of-zone paths (`ls /etc`,
+  `find ~/dir`) allow. `~/.local/bin/pnpm --version` allows since
+  no write-intent verb matches. `bash scripts/install-hooks.sh`
+  allows because the STMT_START anchor blocks the `install`
+  substring match inside the filename.
+
+**Bypass classes deliberately not closed:**
+
+- cp/install/ln/mv/rsync direction-blindness — these commands have
+  src+dst positional args, and the regex check flags any out-of-zone
+  token regardless of whether it's the read source or the write
+  destination. `cp ~/foo /project/x` blocks because of `~/foo` even
+  though it's the read source. Same as the existing BUGS.md entry
+  for cp/install/ln direction-blindness; deferred to the daemon's
+  proper argument parser.
+- Quoted commands inside `bash -c '...'` — COMMAND_FLAT strips the
+  quotes and the inner command's path tokens are then statement-
+  unanchored. bash-guard's exec-string parser handles those.
+
 ## Pass 7 — false-positive reduction (2026-05-15)
 
 Not a security pass — a precision pass. Earlier passes (1-6) repeatedly

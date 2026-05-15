@@ -291,8 +291,8 @@ probe 'cat .claude/settings.json (read)' allow \
 probe 'grep in .claude/settings.json (read)' allow \
   "$(bash_envelope 'grep foo /test/project/.claude/settings.json')"
 
-probe 'cp to project scratch (non-protected)' allow \
-  "$(bash_envelope 'cp /tmp/a /test/project/scratch/b')"
+probe 'cp inside project (src and dst both in zone)' allow \
+  "$(bash_envelope 'cp /test/project/scratch/a /test/project/scratch/b')"
 
 # ----------------------------------------------------------------------------
 # Hardening pass 2026-05-13 (b): submodule + symlink structure. claude-tools

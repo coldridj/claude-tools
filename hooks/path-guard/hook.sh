@@ -29,6 +29,8 @@
 #   Read                                — blocks if path matches [secret]
 #   Edit, Write, MultiEdit, NotebookEdit — zone check, then [secret]/[protected]
 #   Bash                                — zone check on redirect/tee targets;
+#                                         zone check on write-intent command
+#                                         path arguments (mkdir, install, …);
 #                                         backstop blocks any write operator on
 #                                         the same line as a [secret]/[protected]
 #                                         path mention.
@@ -53,6 +55,15 @@
 #     substrings like `install-hooks.sh` produce false positives. The `>` /
 #     `>>` redirect operators remain unanchored. Closes task #19 and the
 #     related BUGS.md entry.
+#   - Zone enforcement on Bash command-arg paths: when a write-intent verb
+#     (mkdir, install, cp, mv, ln, dd, truncate, rm, rmdir, chmod, chown,
+#     chattr, rsync, unzip, bsdtar, tee, sponge, corepack, tar -x|-c|--delete)
+#     or a write-intent flag (--install-directory, --prefix) appears, every
+#     path-like token in the command (~/foo, /tmp/x, $HOME/y) is resolved
+#     and zone-checked. Targets outside $CLAUDE_PROJECT_DIR + $HOME/.claude
+#     are blocked. Catches `mkdir ~/.local/bin`,
+#     `corepack enable --install-directory ~/.local/bin`, and similar
+#     home-dir writes that the redirect-only zone check misses.
 #
 # Repeat-suppression: after the first write-block per session, subsequent
 # blocks emit a short one-liner instead of the full scratch+mv workflow,
@@ -70,7 +81,9 @@
 #     handles those.
 #   - `cp src dst` / `install src dst` / `ln src dst` cannot distinguish read
 #     source from write destination; a protected source still triggers the
-#     backstop. See BUGS.md (path-guard, cp/install/ln direction-blindness).
+#     backstop. The Bash command-arg zone check inherits the same direction-
+#     blindness — `cp ~/foo /project/x` flags `~/foo` even though it's the
+#     read source. See BUGS.md (path-guard, cp/install/ln direction-blindness).
 
 set -euo pipefail
 
@@ -385,7 +398,7 @@ WRITE_CMDS_RE='(>|>>'
 WRITE_CMDS_RE+="|${STMT_START}tee\b"
 WRITE_CMDS_RE+="|${STMT_START}(cp|mv|install|ln|dd)\b"
 WRITE_CMDS_RE+="|${STMT_START}(chmod|chown|chattr)\b"
-WRITE_CMDS_RE+="|${STMT_START}(truncate|rm|rmdir)\b"
+WRITE_CMDS_RE+="|${STMT_START}(truncate|rm|rmdir|mkdir)\b"
 WRITE_CMDS_RE+="|${STMT_START}(rsync|sponge)\b"
 WRITE_CMDS_RE+="|${STMT_START}(unzip|bsdtar)\b"
 WRITE_CMDS_RE+="|${STMT_START}tar\b[^|&;]*[[:space:]](-?[A-Za-z]*x|--extract|--delete)"
@@ -413,6 +426,33 @@ TREE_CMDS_RE+="|${STMT_START}unzip\b"
 TREE_CMDS_RE+="|${STMT_START}rsync\b"
 TREE_CMDS_RE+="|${STMT_START}rm\b[^|&;]*[[:space:]]-[A-Za-z]*[rR]"
 TREE_CMDS_RE+=')'
+
+# Write-intent verbs/flags for the Bash command-arg zone check. Narrower than
+# WRITE_CMDS_RE: only commands that write to a path argument (not via stdout
+# redirect — those are handled by extract_targets). Statement-anchored. The
+# explicit `--install-directory` / `--prefix` flags catch package-manager
+# patterns like `corepack enable --install-directory ~/.local/bin` and
+# `cargo install --root /opt/x` without listing every package tool.
+WRITE_INTENT_RE="${STMT_START}(mkdir|install|cp|mv|ln|dd|truncate|rm|rmdir)\b"
+WRITE_INTENT_RE+="|${STMT_START}(chmod|chown|chattr)\b"
+WRITE_INTENT_RE+="|${STMT_START}(rsync|unzip|bsdtar|tee|sponge)\b"
+WRITE_INTENT_RE+="|${STMT_START}corepack\b"
+WRITE_INTENT_RE+="|${STMT_START}tar\b[^|&;]*[[:space:]](-?[A-Za-z]*[xc]|--extract|--create|--delete)"
+WRITE_INTENT_RE+="|[[:space:]]--install-directory[[:space:]=]"
+WRITE_INTENT_RE+="|[[:space:]]--prefix[[:space:]=]"
+WRITE_INTENT_RE="(${WRITE_INTENT_RE})"
+
+# Extract every path-like token from a command line. Heuristic: tokens that
+# start with `/`, `~/`, or `$HOME/` and run to the next whitespace / shell
+# metachar. Catches positional args (`~/.local/bin` to mkdir) AND embedded
+# paths in flags (`--prefix=/opt/foo`, `--install-directory ~/.local/bin`).
+# Excludes /dev fd nodes and URL schemes — those are not filesystem writes.
+extract_command_paths() {
+  local cmd="$1"
+  echo "$cmd" \
+    | grep -oE '(~/|/[A-Za-z0-9._-]|\$HOME/)[^[:space:]|&;<>"'"'"'\\]*' 2>/dev/null \
+    || true
+}
 
 # ============================================================================
 # Block messages
@@ -620,6 +660,23 @@ case "$TOOL_NAME" in
     && echo "$COMMAND_FLAT" | grep -qE "${SECRET_DIRS_RE}[^|&;]*${PIPE_TO_DEST_RE}" 2>/dev/null; then
       block_write "pipeline feeding a [secret] directory listing to a destructive command" \
         "Cannot statically determine which files will be affected."
+    fi
+
+    # Zone check on Bash command-arg paths (beyond redirect/tee targets).
+    # When a write-intent verb or flag appears, every path-like token in the
+    # command is resolved and zone-checked. Catches `mkdir ~/.local/bin`,
+    # `corepack enable --install-directory ~/.local/bin`, and similar
+    # home-dir writes that the redirect-only zone check misses.
+    if echo "$COMMAND_FLAT" | grep -qE "$WRITE_INTENT_RE" 2>/dev/null; then
+      while IFS= read -r raw; do
+        [ -z "$raw" ] && continue
+        case "$raw" in
+          http://*|https://*|ssh://*|git://*|ftp://*|file://*) continue ;;
+        esac
+        if ! is_in_allowed_zone "$raw"; then
+          block_zone "$raw"
+        fi
+      done < <(extract_command_paths "$COMMAND_FLAT" || true)
     fi
 
     # Zone + per-target rule check on every captured redirect/tee target.

@@ -78,6 +78,43 @@ record of what was resolved.
 
 ### Fixed
 
+- **`hooks/path-guard/hook.sh`: zone enforcement on Bash command-arg
+  paths (not just redirect targets).** The documented allowed-roots
+  contract (`$CLAUDE_PROJECT_DIR` + `$HOME/.claude`) was only enforced
+  on (a) Edit/Write/MultiEdit `file_path` values and (b) Bash redirect
+  / tee targets. Commands that wrote outside the zones via a path
+  argument slipped through — reported repro:
+  `mkdir -p ~/.local/bin && corepack enable --install-directory
+  ~/.local/bin && ~/.local/bin/pnpm --version`. mkdir creates a dir
+  outside the zone; corepack writes pnpm shims to it; the redirect-only
+  check never fires. Fix:
+  - New `WRITE_INTENT_RE` (statement-anchored): matches mkdir,
+    install, cp, mv, ln, dd, truncate, rm, rmdir, chmod, chown,
+    chattr, rsync, unzip, bsdtar, tee, sponge, corepack, `tar -x|-c|
+    --delete`, plus the `--install-directory` and `--prefix` flags.
+  - New `extract_command_paths`: scans the command for path-like
+    tokens starting with `/`, `~/`, or `$HOME/`.
+  - When `WRITE_INTENT_RE` matches, every extracted token is resolved
+    and zone-checked; out-of-zone targets block (exit 2).
+  - mkdir added to `WRITE_CMDS_RE` so the existing protected-path
+    backstop also catches it.
+  - 11 new regression tests under "Bash command-arg zone check"
+    (mkdir/corepack/install/rsync/--prefix block; in-zone mkdir+cp
+    allow; read-only `ls /etc`, `find ~/...` allow; binary execution
+    `~/.local/bin/pnpm --version` allows since no write-intent verb;
+    `bash scripts/install-hooks.sh` allows since `install` is
+    substring, not statement-start). Existing word-boundary-regression
+    tests updated to use in-zone paths so they remain focused on the
+    boundary regex, not zone enforcement.
+
+  Known limitation: cp/install/ln/mv/rsync direction-blindness inherits
+  to this check too — `cp ~/foo /project/x` flags `~/foo` even though
+  it's the read source. Already documented in BUGS.md;
+  deferred to the daemon's argument parser.
+
+  All 93 jailbreak probes hold. Closes a real-world gap reported after
+  a parallel session ran the repro command and modified `~/.local/bin/`.
+
 - **`hooks/path-guard/hook.sh`: statement-start anchor on command-name
   patterns in `WRITE_CMDS_RE` / `TREE_CMDS_RE`.** Previously the bare
   `\binstall\b`, `\bcp\b`, `\bmv\b`, `\brm\b`, etc. word-boundary
