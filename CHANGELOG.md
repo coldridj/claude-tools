@@ -21,6 +21,34 @@ record of what was resolved.
 
 ### Added
 
+- **`hooks/cd-guard/`: new PreToolUse hook that blocks top-level `cd`
+  in Bash tool calls.** The Bash tool's cwd persists across tool calls;
+  a stray top-level `cd` biases every later command that derives paths
+  from `$CLAUDE_PROJECT_DIR`/`$PWD` (path-guard, read-guard,
+  session-scratch, always-allow all do). Hook uses a statement-anchored
+  regex — `cd` must appear as the first token of a logical statement
+  (start of line, or after `;` / `&` / `|`). Subshell-scoped cd is
+  intentionally allowed: `(cd X && cmd)`, `$(cd X)`, `` `cd X` ``,
+  `{ cd X; cmd; }`, and `bash -c 'cd X && cmd'` all pass since cwd
+  doesn't leak. Override via `CD_GUARD_DISABLED=1`. 26 unit tests in
+  `hooks/cd-guard/test.sh`; suite passes via `bash hooks/test-all.sh`
+  alongside the existing 7 suites.
+- **`scripts/install-hooks.sh`: also installs Claude Code hooks**
+  (PreToolUse / SessionStart / SessionEnd / etc.). Each subdir under
+  `hooks/` is symlinked at `<consumer-project>/.claude/hooks/<name>`
+  with a relative link computed via `realpath --relative-to` (so
+  `.claude/hooks/` remains committable). Consumer-root detection:
+  `git rev-parse --show-superproject-working-tree` if claude-tools is
+  vendored as a submodule (Claude hooks land in the superproject),
+  otherwise this clone's own top-level. Git hooks still install into
+  this clone's gitdir regardless (so submodule git hooks like pre-push
+  fire on the submodule's own commits, not the superproject's). The
+  old script was git-hooks-only and required manual `ln -s` for each
+  Claude hook — a missing `scratch-allow` symlink in the megarepo
+  consumer (registered in `.claude/settings.json` but no symlink, so
+  the hook was silently no-op) made the gap obvious. Re-run from any
+  consumer to backfill.
+
 - **`hooks/lib/layered-config.sh`: shared test fixture for the three-file
   config loading pattern** (default + `$HOME/.claude/.<name>` +
   `$CLAUDE_PROJECT_DIR/.<name>`). Sourced by per-hook `test.sh` scripts to
