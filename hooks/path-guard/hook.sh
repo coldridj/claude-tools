@@ -47,6 +47,12 @@
 #   - Each pattern's command-text regex is word-bounded on both sides so
 #     basename patterns like `.git` don't match inside `origin.git`,
 #     `.claude` doesn't match inside `myclaude/...`, etc.
+#   - Command-name patterns (`\bcp\b`, `\binstall\b`, etc.) are statement-
+#     anchored: the command must be the first token of a statement (start
+#     of line, or after `;`/`&`/`|`/`(`/`{`/backtick) — otherwise filename
+#     substrings like `install-hooks.sh` produce false positives. The `>` /
+#     `>>` redirect operators remain unanchored. Closes task #19 and the
+#     related BUGS.md entry.
 #
 # Repeat-suppression: after the first write-block per session, subsequent
 # blocks emit a short one-liner instead of the full scratch+mv workflow,
@@ -58,7 +64,10 @@
 #   - $VAR / $(cmd) redirect targets cannot be analysed statically.
 #   - Relative redirect/tee targets above the project root (../../etc/x) are not
 #     captured for zone enforcement; only absolute, ~, and quoted forms are.
-#   - Indirect execution (base64 | sh) is bash-guard's domain.
+#   - Indirect execution (base64 | sh, bash -c '<destructive>') is bash-guard's
+#     domain. Statement-start anchoring deliberately does NOT detect commands
+#     hidden inside a quoted bash -c argument; bash-guard's exec-string parser
+#     handles those.
 #   - `cp src dst` / `install src dst` / `ln src dst` cannot distinguish read
 #     source from write destination; a protected source still triggers the
 #     backstop. See BUGS.md (path-guard, cp/install/ln direction-blindness).
@@ -347,41 +356,62 @@ PROTECTED_DIRS_RE=""
 SECRET_DIRS_RE=""
 [ "${#SECRET_PATTERNS[@]}" -gt 0 ] && SECRET_DIRS_RE=$(build_dir_prefix_regex "${SECRET_PATTERNS[@]}")
 
+# Statement-start anchor: a command name must appear as the first token of a
+# logical statement — start-of-line, or after one of `;`/`&`/`|`/`(`/`{`/backtick
+# followed by optional whitespace. Without this, `\binstall\b` matched `install`
+# *inside* filenames (e.g. `bash scripts/install-hooks.sh`), producing false
+# positives — task #19 and the BUGS.md "WRITE_CMDS_RE substring" entry.
+#
+# Why these separators specifically:
+#   ;      sequential statement separator
+#   |      pipe (single, also part of ||)
+#   &      background, also part of &&
+#   (      subshell (rm /foo)
+#   {      brace group { rm /foo; }
+#   `      backtick command substitution
+# `$(...)` is covered by `(` since COMMAND_FLAT strips no parentheses.
+# Quoted forms (`'rm /foo'`, `"rm /foo"`) lose their quotes in COMMAND_FLAT
+# and become un-anchored mid-string — those are bash-guard's domain
+# (indirect execution via `bash -c`).
+STMT_START='(^|[;&|({`][[:space:]]*)'
+
 # Programs/operators that write to a file. cat/head/grep/less are excluded —
 # those are read-guard's domain. Some entries require a destructive flag
 # (e.g. tar -x, gawk -i inplace, curl -o) so a read-only invocation of the
-# same binary does not get falsely flagged.
+# same binary does not get falsely flagged. Every command-name pattern is
+# prefixed with STMT_START; only the bare `>` / `>>` redirect operators
+# remain unanchored (they can appear anywhere on a statement line).
 WRITE_CMDS_RE='(>|>>'
-WRITE_CMDS_RE+='|\btee\b'
-WRITE_CMDS_RE+='|\bcp\b|\bmv\b|\binstall\b|\bln\b|\bdd\b'
-WRITE_CMDS_RE+='|\bchmod\b|\bchown\b|\bchattr\b'
-WRITE_CMDS_RE+='|\btruncate\b|\brm\b|\brmdir\b'
-WRITE_CMDS_RE+='|\brsync\b|\bsponge\b'
-WRITE_CMDS_RE+='|\bunzip\b|\bbsdtar\b'
-WRITE_CMDS_RE+='|\btar\b[^|&;]*[[:space:]](-?[A-Za-z]*x|--extract|--delete)'
-WRITE_CMDS_RE+='|\bgawk\b[^|&;]*[[:space:]]-i[[:space:]]+inplace'
-WRITE_CMDS_RE+='|\bawk\b[^|&;]*[[:space:]]-i[[:space:]]+inplace'
-WRITE_CMDS_RE+='|\bfind\b[^|&;]*[[:space:]]-(delete|exec[a-z]*)\b'
-WRITE_CMDS_RE+='|\bxargs\b[^|&;]*[[:space:]](rm|cp|mv|chmod|chown|truncate|install|ln|dd|tee|sed)\b'
-WRITE_CMDS_RE+='|\bgit\b[^|&;]*[[:space:]](checkout|restore|reset|apply|clean|mv|rm)\b'
-WRITE_CMDS_RE+='|\bcurl\b[^|&;]*[[:space:]](-o\b|-O\b|--output\b|--output-document\b)'
-WRITE_CMDS_RE+='|\bwget\b[^|&;]*[[:space:]](-O\b|--output-document\b)'
-WRITE_CMDS_RE+='|\bgpg\b[^|&;]*[[:space:]](-o\b|--output\b)'
-WRITE_CMDS_RE+='|\bopenssl\b[^|&;]*[[:space:]]-out\b'
-WRITE_CMDS_RE+='|\bpython3?\b|\bnode\b'
-WRITE_CMDS_RE+='|\bsed\b[^|&;]*[[:space:]](-[A-Za-z]*i([[:space:]=.]|$)|--in-place([[:space:]=]|$))'
-WRITE_CMDS_RE+='|\bperl\b[^|&;]*[[:space:]](-[A-Za-z]*i([[:space:]=.]|$)|--in-place([[:space:]=]|$))'
-WRITE_CMDS_RE+='|\bruby\b[^|&;]*[[:space:]](-[A-Za-z]*i([[:space:]=.]|$))'
+WRITE_CMDS_RE+="|${STMT_START}tee\b"
+WRITE_CMDS_RE+="|${STMT_START}(cp|mv|install|ln|dd)\b"
+WRITE_CMDS_RE+="|${STMT_START}(chmod|chown|chattr)\b"
+WRITE_CMDS_RE+="|${STMT_START}(truncate|rm|rmdir)\b"
+WRITE_CMDS_RE+="|${STMT_START}(rsync|sponge)\b"
+WRITE_CMDS_RE+="|${STMT_START}(unzip|bsdtar)\b"
+WRITE_CMDS_RE+="|${STMT_START}tar\b[^|&;]*[[:space:]](-?[A-Za-z]*x|--extract|--delete)"
+WRITE_CMDS_RE+="|${STMT_START}gawk\b[^|&;]*[[:space:]]-i[[:space:]]+inplace"
+WRITE_CMDS_RE+="|${STMT_START}awk\b[^|&;]*[[:space:]]-i[[:space:]]+inplace"
+WRITE_CMDS_RE+="|${STMT_START}find\b[^|&;]*[[:space:]]-(delete|exec[a-z]*)\b"
+WRITE_CMDS_RE+="|${STMT_START}xargs\b[^|&;]*[[:space:]](rm|cp|mv|chmod|chown|truncate|install|ln|dd|tee|sed)\b"
+WRITE_CMDS_RE+="|${STMT_START}git\b[^|&;]*[[:space:]](checkout|restore|reset|apply|clean|mv|rm)\b"
+WRITE_CMDS_RE+="|${STMT_START}curl\b[^|&;]*[[:space:]](-o\b|-O\b|--output\b|--output-document\b)"
+WRITE_CMDS_RE+="|${STMT_START}wget\b[^|&;]*[[:space:]](-O\b|--output-document\b)"
+WRITE_CMDS_RE+="|${STMT_START}gpg\b[^|&;]*[[:space:]](-o\b|--output\b)"
+WRITE_CMDS_RE+="|${STMT_START}openssl\b[^|&;]*[[:space:]]-out\b"
+WRITE_CMDS_RE+="|${STMT_START}(python3?|node)\b"
+WRITE_CMDS_RE+="|${STMT_START}sed\b[^|&;]*[[:space:]](-[A-Za-z]*i([[:space:]=.]|$)|--in-place([[:space:]=]|$))"
+WRITE_CMDS_RE+="|${STMT_START}perl\b[^|&;]*[[:space:]](-[A-Za-z]*i([[:space:]=.]|$)|--in-place([[:space:]=]|$))"
+WRITE_CMDS_RE+="|${STMT_START}ruby\b[^|&;]*[[:space:]](-[A-Za-z]*i([[:space:]=.]|$))"
 WRITE_CMDS_RE+=')'
 
 # Subset of WRITE_CMDS_RE for commands that operate on a directory tree rather
 # than a single named file (so the protected-FILE regex won't catch them but a
-# directory-prefix regex will).
-TREE_CMDS_RE='(\bfind\b[^|&;]*[[:space:]]-(delete|exec[a-z]*)\b'
-TREE_CMDS_RE+='|\btar\b[^|&;]*[[:space:]](-?[A-Za-z]*x|--extract|--delete)'
-TREE_CMDS_RE+='|\bunzip\b'
-TREE_CMDS_RE+='|\brsync\b'
-TREE_CMDS_RE+='|\brm\b[^|&;]*[[:space:]]-[A-Za-z]*[rR]'
+# directory-prefix regex will). Same statement-start anchoring as WRITE_CMDS_RE.
+TREE_CMDS_RE="(${STMT_START}find\b[^|&;]*[[:space:]]-(delete|exec[a-z]*)\b"
+TREE_CMDS_RE+="|${STMT_START}tar\b[^|&;]*[[:space:]](-?[A-Za-z]*x|--extract|--delete)"
+TREE_CMDS_RE+="|${STMT_START}unzip\b"
+TREE_CMDS_RE+="|${STMT_START}rsync\b"
+TREE_CMDS_RE+="|${STMT_START}rm\b[^|&;]*[[:space:]]-[A-Za-z]*[rR]"
 TREE_CMDS_RE+=')'
 
 # ============================================================================
@@ -576,14 +606,18 @@ case "$TOOL_NAME" in
     # The plain backstop's `[^|&;]*` cannot cross a pipe, so the destructive
     # command on the right and the path mention on the left would not match
     # together. Allow pipes between PROTECTED_DIRS_RE and xargs+destructive.
-    XARGS_DEST_RE='\bxargs\b[^|&;]*[[:space:]](rm|cp|mv|chmod|chown|truncate|install|ln|dd|tee|sed|sponge)\b'
+    # Both the xargs form and the bare-command form are statement-anchored
+    # (they must appear immediately after the pipe + optional whitespace) so
+    # `… | echo "got-rm-result"` doesn't trigger.
+    XARGS_DEST_RE="\bxargs\b[^|&;]*[[:space:]](rm|cp|mv|chmod|chown|truncate|install|ln|dd|tee|sed|sponge)\b"
+    PIPE_TO_DEST_RE="\|[[:space:]]*(${XARGS_DEST_RE}|(rm|cp|mv|sponge)\b)"
     if [ -n "$PROTECTED_DIRS_RE" ] \
-    && echo "$COMMAND_FLAT" | grep -qE "${PROTECTED_DIRS_RE}[^|&;]*\|[^|&;]*(${XARGS_DEST_RE}|\brm\b|\bcp\b|\bmv\b|\bsponge\b)" 2>/dev/null; then
+    && echo "$COMMAND_FLAT" | grep -qE "${PROTECTED_DIRS_RE}[^|&;]*${PIPE_TO_DEST_RE}" 2>/dev/null; then
       block_write "pipeline feeding a [protected] directory listing to a destructive command" \
         "Cannot statically determine which files will be affected. Use an explicit path."
     fi
     if [ -n "$SECRET_DIRS_RE" ] \
-    && echo "$COMMAND_FLAT" | grep -qE "${SECRET_DIRS_RE}[^|&;]*\|[^|&;]*(${XARGS_DEST_RE}|\brm\b|\bcp\b|\bmv\b|\bsponge\b)" 2>/dev/null; then
+    && echo "$COMMAND_FLAT" | grep -qE "${SECRET_DIRS_RE}[^|&;]*${PIPE_TO_DEST_RE}" 2>/dev/null; then
       block_write "pipeline feeding a [secret] directory listing to a destructive command" \
         "Cannot statically determine which files will be affected."
     fi

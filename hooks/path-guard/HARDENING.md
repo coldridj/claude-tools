@@ -161,6 +161,42 @@ works when the submodule is vendored under a different name (e.g.
 `vendor/foo`). Either layer alone is sufficient; together they survive
 either being missing.
 
+## Pass 7 — false-positive reduction (2026-05-15)
+
+Not a security pass — a precision pass. Earlier passes (1-6) repeatedly
+*widened* the backstop to close bypass classes; pass 7 *narrows* one
+specific overreach.
+
+**Closed:**
+
+- **`WRITE_CMDS_RE` substring false positives** (task #19 in megarepo).
+  The bare `\binstall\b`, `\bcp\b`, `\bmv\b`, `\brm\b`, etc. word-
+  boundary patterns matched the command name as a substring anywhere
+  on the line, including inside filenames. Triggered by
+  `bash git_modules/claude-tools/scripts/install-hooks.sh` — `install`
+  inside `install-hooks.sh` lit up `\binstall\b`, combined with the
+  `claude-tools/scripts/**` protected pattern, and the backstop
+  blocked. Fixed by a new `STMT_START` prefix on every command-name
+  pattern: a command name now matches only if it appears as the first
+  token of a statement (`^` or after `;` / `&` / `|` / `(` / `{` /
+  backtick + optional whitespace). Bare `>` / `>>` redirect operators
+  stay unanchored. The pipe-spanning xargs/rm/cp/mv/sponge check
+  similarly requires the post-`|` command to be whitespace-immediate.
+
+**Coverage:**
+
+- 11 new regression tests in `test.sh` under "Bash backstop
+  statement-start anchoring" — 6 false-positive shapes (install-hooks
+  / cp-frontend / mv-data / rm-cache / echo + substring / pipe + echo
+  + substring) + 5 real positives (install/cp/rm at start of line,
+  after `;`, after `&&`, inside `( )`, inside `{ ; }`).
+
+**Bypass classes deliberately not closed:**
+
+- Commands hidden inside `bash -c '<destructive>'` — the quoted form
+  loses its quotes in `COMMAND_FLAT` and lands the command at a non-
+  statement-start position. Defended by bash-guard's exec-string parser.
+
 ## Known limitations (deferred)
 
 These are documented inside `hook.sh` and probed-but-marked-allowed in

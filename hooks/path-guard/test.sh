@@ -342,6 +342,50 @@ expect_block "rm -rf .git/objects (legit, dir-prefix tree match)" \
 expect_block "find -delete inside .claude (legit, tree)" \
   '{"tool_name":"Bash","tool_input":{"command":"find /test/project/.claude -name '\''*.json'\'' -delete"}}'
 
+echo "=== Bash backstop statement-start anchoring (task #19 regressions) ==="
+# Command names in WRITE_CMDS_RE (cp, mv, install, ln, rm, chmod, …) once
+# matched as substrings inside filenames like `install-hooks.sh` —
+# `bash git_modules/claude-tools/scripts/install-hooks.sh` was falsely
+# blocked because the `install` substring of `install-hooks.sh` lit up
+# `\binstall\b`, combined with the `claude-tools/scripts/**` protected
+# pattern on the same line. The STMT_START anchor requires the command
+# to appear after a statement boundary (^, ;, |, &, (, {, backtick).
+
+expect_allow "bash invoking install-hooks.sh under protected dir" \
+  '{"tool_name":"Bash","tool_input":{"command":"bash git_modules/claude-tools/scripts/install-hooks.sh"}}'
+
+expect_allow "bash invoking a script with cp in its name under protected dir" \
+  '{"tool_name":"Bash","tool_input":{"command":"bash git_modules/claude-tools/scripts/cp-frontend.sh"}}'
+
+expect_allow "bash invoking a script with mv in its name under protected dir" \
+  '{"tool_name":"Bash","tool_input":{"command":"bash git_modules/claude-tools/scripts/mv-data.sh"}}'
+
+expect_allow "bash invoking a script with rm in its name under protected dir" \
+  '{"tool_name":"Bash","tool_input":{"command":"bash git_modules/claude-tools/scripts/rm-cache.sh"}}'
+
+expect_allow "echo with substring 'rm' in arg" \
+  '{"tool_name":"Bash","tool_input":{"command":"echo \"got-rm-result\" > /test/project/out.txt"}}'
+
+expect_allow "pipe terminating in echo with substring 'mv' in arg" \
+  '{"tool_name":"Bash","tool_input":{"command":"find /tmp/foo | head -3 | echo with-mv-inside-arg"}}'
+
+# Real positives — these MUST still block.
+
+expect_block "install at start of line targeting protected dir" \
+  '{"tool_name":"Bash","tool_input":{"command":"install -m 755 /tmp/src /test/project/git_modules/claude-tools/scripts/x.sh"}}'
+
+expect_block "install after semicolon targeting protected dir" \
+  '{"tool_name":"Bash","tool_input":{"command":"echo hi; install /tmp/src /test/project/git_modules/claude-tools/scripts/x.sh"}}'
+
+expect_block "rm after && targeting protected" \
+  '{"tool_name":"Bash","tool_input":{"command":"true && rm /test/project/git_modules/claude-tools/scripts/x.sh"}}'
+
+expect_block "rm inside subshell targeting protected" \
+  '{"tool_name":"Bash","tool_input":{"command":"(rm /test/project/git_modules/claude-tools/scripts/x.sh)"}}'
+
+expect_block "rm inside brace group targeting protected" \
+  '{"tool_name":"Bash","tool_input":{"command":"{ rm /test/project/git_modules/claude-tools/scripts/x.sh; }"}}'
+
 echo "=== Layered config files (default + user + project) ==="
 # Exercise the three-file concatenation pattern: shipped default + user-wide
 # $HOME/.claude/.path-guard + project $CLAUDE_PROJECT_DIR/.path-guard. The

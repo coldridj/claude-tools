@@ -50,6 +50,28 @@ record of what was resolved.
 
 ### Fixed
 
+- **`hooks/path-guard/hook.sh`: statement-start anchor on command-name
+  patterns in `WRITE_CMDS_RE` / `TREE_CMDS_RE`.** Previously the bare
+  `\binstall\b`, `\bcp\b`, `\bmv\b`, `\brm\b`, etc. word-boundary
+  patterns matched the command name as a substring anywhere on the
+  line, including inside filenames. The reported false positive was
+  `bash git_modules/claude-tools/scripts/install-hooks.sh` — the
+  `install` substring of `install-hooks.sh` lit up `\binstall\b`,
+  combined with the `claude-tools/scripts/**` protected pattern on
+  the same line, and the backstop blocked. The fix anchors every
+  command-name pattern with a new `STMT_START='(^|[;&|({` + backtick +
+  `][[:space:]]*)'` prefix, requiring the command to appear as the
+  first token of a logical statement. The bare `>` / `>>` redirect
+  operators stay unanchored. The pipe-spanning xargs/rm/cp/mv/sponge
+  check also picks up the anchor (commands after `|` must be
+  whitespace-immediate). 11 new regression tests in
+  `hooks/path-guard/test.sh` cover the install-hooks repro plus four
+  other false-positive shapes (`bash scripts/cp-frontend.sh`,
+  `mv-data.sh`, `rm-cache.sh`, `echo "got-rm-result"`, pipe + echo
+  with substring `mv`); 5 new positive-case tests confirm the
+  statement-start anchor still catches `install`, `rm`, `cp` at
+  start of line, after `;`, after `&&`, inside `( )`, and inside
+  `{ ; }`. Closes task #19 in the megarepo task list.
 - **`hooks/always-allow/hook.sh`: fail-open on missing `jq` or invalid
   POSIX ERE.** Two previously-fatal failure modes that aborted the hook
   hard under `set -euo pipefail` and (via the non-zero exit) blocked
