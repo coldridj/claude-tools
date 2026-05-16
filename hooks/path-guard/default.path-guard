@@ -100,6 +100,14 @@ CLAUDE.md
 .claude/hooks/**/hook.sh
 .claude/hooks/**/compact.sh
 
+# === Hook adapters — daemon-route shims proxying every tool call ===
+# Functionally the same blast radius as .claude/hooks/**/hook.sh: an
+# attacker editing _lib.sh or a per-hook adapter (`scratch-allow.sh`,
+# `path-guard.sh`, …) can intercept every Pre/Post tool invocation the
+# project routes through the hook-daemon. Protect the whole subtree so
+# new adapters added later are covered without per-file updates.
+.claude/hook-adapters/**
+
 # === Git internals — config, refs, packed objects, hooks ===
 # .git is the directory at the repo root for ordinary clones and the file
 # pointing into .git/modules/<sub>/ for submodules; the real submodule gitdir
