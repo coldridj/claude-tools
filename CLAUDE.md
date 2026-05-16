@@ -4,7 +4,7 @@ Loaded when working inside the `claude-tools` submodule (a vendored bundle of Pr
 
 ## Run every hook's tests before committing
 
-Before any commit touching `git_modules/claude-tools/`, run `bash hooks/test-all.sh` and confirm zero failures. The runner invokes every hook's own `test.sh` in sequence. Hook scripts are the last line of defence against an agent doing something destructive; a regression in one of them has bigger blast radius than the change itself.
+Before any commit touching `git_modules/claude-tools/`, run `hooks/test-all.sh` and confirm zero failures. The runner invokes every hook's own `test.sh` in sequence. Hook scripts are the last line of defence against an agent doing something destructive; a regression in one of them has bigger blast radius than the change itself.
 
 If a hook's tests are failing for reasons unrelated to the change, document in `BUGS.md` rather than skipping — and surface the failure to me before proceeding.
 
@@ -21,10 +21,6 @@ If a hook's tests are failing for reasons unrelated to the change, document in `
 - `CHANGELOG.md` — dated entry per commit; closed BUGS.md items move here.
 - `scripts/install-hooks.sh` — wires the hooks into a consumer project's `<gitdir>/hooks/` via symlinks.
 - `scripts/git-hooks/pre-push` — auto-mirrors commits to the GitHub mirror.
-
-## Hook protection
-
-`**/hook.sh` and `**/compact.sh` are path-guard protected — use the scratch+mv workflow from the root CLAUDE.md. Test files, READMEs, and HARDENING.md are unprotected.
 
 ## Daemon rewrite in flight
 
