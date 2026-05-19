@@ -1,0 +1,19 @@
+# default.read-guard — shipped defaults for the read-guard hook.
+#
+# Flat list of path-prefix exclusions. The guard does not apply to a command
+# that references any listed entry as a path token (preceded by a path-boundary
+# char: whitespace, /, ', ", =, or start of line). Include the trailing slash
+# to mean "this directory".
+#
+# Examples:
+#   build/output/   # any path with /build/output/ in it
+#   docs/dumps/     # arbitrary diagnostic dump directory
+#
+# Loaded together with $HOME/.claude/.read-guard and
+# $CLAUDE_PROJECT_DIR/.read-guard — all three files concatenate. To remove a
+# default rule, comment out the line here; there is no `!` negation.
+#
+# Note: the scratch root from the $CLAUDE_SCRATCH_ROOT env var (default
+# ".scratch") is exempted automatically by the hook — do not list it here.
+#
+# Comments begin with # and run to end of line.

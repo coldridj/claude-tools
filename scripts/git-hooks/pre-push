@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# pre-push: when pushing main to origin, also publish a flat single-commit
+# snapshot to origin/github-mirror.
+#
+# git invokes pre-push as: pre-push <remote-name> <remote-url>
+# and on stdin streams: <local-ref> <local-sha> <remote-ref> <remote-sha>
+# for every ref being pushed. We scan for refs/heads/main, capture the
+# local-sha being pushed, and call scripts/push-github-mirror.sh against
+# that SHA. The mirror push goes to a different ref (refs/heads/github-mirror)
+# so the inner push will hit this hook again but find no main ref to mirror
+# and exit silently — no recursion.
+#
+# If the mirror push fails, this hook exits non-zero and aborts the main
+# push. Use `git push --no-verify` to bypass.
+#
+# Installed via scripts/install-hooks.sh.
+
+set -euo pipefail
+
+REMOTE_NAME="${1:-}"
+
+if [ "$REMOTE_NAME" != "origin" ]; then
+  exit 0
+fi
+
+ZERO_SHA="0000000000000000000000000000000000000000"
+main_sha=""
+
+while read -r _local_ref local_sha remote_ref _remote_sha; do
+  if [ "$remote_ref" = "refs/heads/main" ]; then
+    main_sha="$local_sha"
+    break
+  fi
+done
+
+if [ -z "$main_sha" ] || [ "$main_sha" = "$ZERO_SHA" ]; then
+  exit 0
+fi
+
+repo_root="$(git rev-parse --show-toplevel)"
+exec bash "$repo_root/scripts/push-github-mirror.sh" --sha "$main_sha"
